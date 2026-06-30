@@ -27,9 +27,10 @@ uploaded_datasets/
 UNSW*.csv
 UNSW*.csv
 
-# ET-Open rules (large — download script provided)
+# ET-Open rules (public dataset from Proofpoint — download separately)
 rules/emerging_threats.rules
 rules/emerging.rules.tar.gz
+rules/rules/
 
 # Runtime data (generated at runtime)
 alerts.json
