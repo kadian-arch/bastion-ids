@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+.venv/
+env/
+
+# ML models (too large for git — distributed via installer release)
+models/*.pkl
+models/*.keras
+models/*.json
+models/*.npy
+
+# Preprocessor artifacts (bundled with installer)
+utils/preprocessor.pkl
+utils/scaler.pkl
+utils/label_encoder.pkl
+utils/anomaly_threshold.json
+
+# Dataset files (UNSW-NB15 — download separately from source)
+data/*.csv
+data/*.pcap
+data/*.pcapng
+uploaded_datasets/
+UNSW*.csv
+UNSW*.csv
+
+# ET-Open rules (large — download script provided)
+rules/emerging_threats.rules
+rules/emerging.rules.tar.gz
+
+# Runtime data (generated at runtime)
+alerts.json
+alerts_archive.json
+logs/
+reports/
+*.log
+*.err.log
+*.pcap
+*.pcapng
+*.csv
+
+# Node
+node_modules/
+app-desktop/node_modules/
+dist/
+app-desktop/dist/
+app-desktop/build/
+
+# Installer output (distributed via GitHub Releases)
+_installer/
+build/
+
+# Dev/debug files
+_dev_archive/
+_demo_tools/
+_runtime/
+catboost_info/
+*.blockmap
+builder-debug.yml
+diagnose_*.py
+debug_*.py
+compute_*.py
+test_*.py
+verify_*.py
+engine1.py
+engine2.py
+sentinel.py
+full_test.py
+run_bastion.py
+_portchange.py
+_sigdiag.py
+_sigverify.py
+*_run.log
+*.err.log
+final_metrics.json
+layer_metrics.json
+X_test_proc.npy
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

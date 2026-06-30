@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bastion-dark:   #0b1120;
+  --color-bastion-card:   #0f172a;
+  --color-bastion-accent: #06b6d4;
+  --color-bastion-border: #1e293b;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-bastion-dark);
+    color: #f1f5f9;
+    margin: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace, sans-serif;
+    overflow: hidden;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+/* ── Custom scrollbar ─────────────────────────────────────────────────────── */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #1e293b transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #1e293b;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #334155;
+}
+
+/* ── Entrance animations ──────────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-in-from-bottom-4 {
+  from { transform: translateY(1rem); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.animate-in {
+  animation-duration: 0.3s;
+  animation-fill-mode: both;
+  animation-timing-function: ease-out;
+}
+
+.fade-in {
+  animation-name: fade-in;
+}
+
+.slide-in-from-bottom-4 {
+  animation-name: slide-in-from-bottom-4;
+}
+
+/* When both are used together (common pattern: animate-in fade-in slide-in-from-bottom-4) */
+.animate-in.fade-in.slide-in-from-bottom-4 {
+  animation-name: slide-in-from-bottom-4;
+}
