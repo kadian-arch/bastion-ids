@@ -1,6 +1,6 @@
 # Bastion IDS
 
-![License](https://img.shields.io/badge/license-MIT-blue)
+![License](https://img.shields.io/badge/license-Proprietary-red)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
@@ -124,7 +124,7 @@ The dashboard includes response controls (port quarantine, IP blocking) designed
 
 **Operations Center**: Live stats (CPU, flows analyzed, threats detected, engine uptime) plus real-time resource graphs and network architecture overview. Shows all 4 detection layers with live status.
 
-**Live Packet Capture**: Wireshark-style table streaming real packets off the wire. Filter by protocol (TCP, UDP, ICMP, DNS, HTTP, TLS, ARP, SSH). Threats highlighted in red. Click any row for the full forensic breakdown which engine flagged it, confidence, raw hex and BPF capabilty to narrow down to a particular traffic capture type.
+**Live Packet Capture**: Wireshark-style table streaming real packets off the wire. Filter by protocol (TCP, UDP, ICMP, DNS, HTTP, TLS, ARP, SSH). Threats highlighted in red. Click any row for the full forensic breakdown which engine flagged it, confidence, raw hex and BPF capability to narrow down to a particular traffic capture type.
 
 **Data Ingest Portal**: Drop a `.csv`, `.pcap`, or `.log` file and run a full ML sweep across all flows. Good for post-incident analysis of captured traffic.
 
@@ -136,7 +136,7 @@ The dashboard includes response controls (port quarantine, IP blocking) designed
 
 **Command & Control**: Admin panel for policy controls, settings, API key rotation, alert archiving, and engine management.
 
-Every alert carries a MITRE ATT&CK technique mapping. Live capture sessions can be exported as CSV or PCAP (Wireshark-compatible) directly from the dashboard.
+Every alert carries a MITRE ATT&CK technique mapping. Live capture sessions can be exported as CSV or raw PCAP (Wireshark-compatible) directly from the dashboard.
 
 ## Protective controls
 
@@ -176,26 +176,26 @@ Every alert can be reviewed directly in the Threat Intelligence page. Analysts c
 
 **Frontend:** Electron, React 18, Vite, TailwindCSS, Chart.js
 
-**Models trained on:** UNSW-NB15 dataset and tuned on CICIDS2017 to broaden attack categories in introduce variants detection capabilties.
+**Models trained on:** UNSW-NB15 dataset and tuned on CICIDS2017 to broaden attack categories and introduce variant detection capabilities.
 
 
 ## Project background
 
 This started as a final year B.Tech project at the University of Buea (Network & Security, class of 2026). The goal was to go beyond simple signature matching and build something closer to how real enterprise IDS tools work layered detection, no single point of failure, and a UI that makes the data readable.
 
-It's fully open source. If you're a researcher, a student, or someone who wants to understand how layered network detection works under the hood, everything is here.
+The source code is publicly available. If you're a researcher, a student, or someone who wants to understand how layered network detection works under the hood, everything is here.
 
 
 ## Troubleshooting
 
 **Windows SmartScreen blocks the installer ("Windows protected your PC")**
-This appears because the installer is not commercially code-signed. Click "More info" then "Run anyway." The installer is safe — you can verify the SHA-256 checksum against the release page.
+This appears because the installer is not commercially code-signed. Click "More info" then "Run anyway." The installer is safe.
 
 **"Error decompressing data! Corrupted installer?" during installation**
 Windows Defender is quarantining files mid-extraction. Before running the installer, go to Windows Security → Virus & threat protection → Manage settings → turn off Real-time protection temporarily, complete the installation, then turn it back on. Alternatively add `C:\Program Files\Bastion IDS` as a Defender exclusion before running the installer.
 
 **"Engine failed to start" on the splash screen**
-The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall — a corrupted installation is the most likely cause.
+The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall. A corrupted installation is the most likely cause.
 
 **Live packet capture shows no traffic**
 Npcap is required for live capture. If the installer did not install it automatically, download it from [npcap.com](https://npcap.com) and install it manually, then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, raw packet capture is blocked by Windows.
@@ -219,7 +219,7 @@ If you need Bastion IDS deployed in your organization, want it customized for a 
 
 ## License
 
-MIT — do what you want with it, attribution appreciated.
+Proprietary. Free to download and use for network security monitoring. Redistribution, modification, and commercial use without written permission from Kadian Inc are not permitted. See `build/eula.txt` in the installer for full terms.
 
 ---
 
