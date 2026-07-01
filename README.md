@@ -65,6 +65,32 @@ Network traffic
 | Precision | 94.9% |
 | F1 Score | 0.89 |
 
+## Research and training
+
+The AI component is the core of this work. The application exists to demonstrate that the models work on real traffic, not just benchmarks.
+
+**Dataset:** UNSW-NB15 (175,341 training + 82,332 test records, 9 attack categories) combined with CICIDS 2018-02-14 (400,000 flows) for a total corpus of 657,673 samples across 10 classes. The dataset is severely imbalanced — Worms has 174 training samples, Backdoor has 2,329, while Exploits has 44,525 and Normal has 93,000+.
+
+**Leakage prevention:** The preprocessor (StandardScaler + OrdinalEncoder) was fitted exclusively on the training set and applied identically to the test set. SMOTE was applied after the split and only to training data. The test set of 131,535 samples (20%) was never touched during any fitting step. IP addresses, timestamps, and port identifiers that would allow models to memorise endpoints rather than learn behaviour were excluded from the feature vector.
+
+**Class imbalance:** Addressed at three levels. SMOTE was applied to bring all minority classes to a minimum of 800 samples in the training set. Random Forest used `class_weight="balanced"`, CatBoost used `auto_class_weights="Balanced"`, and the DNN used computed class weights passed at training time.
+
+**Overfitting prevention:** Random Forest and XGBoost used RandomizedSearchCV with 3-fold cross-validation (12 and 15 iterations respectively). CatBoost used early stopping with patience 30 and stopped at iteration 128 of 500. The DNN (Residual MLP) used dropout across three stages (0.3, 0.25, 0.2), batch normalisation, early stopping at patience 8 on validation accuracy, and ReduceLROnPlateau. The autoencoder early-stopped at epoch 74 of 80.
+
+**Results on the held-out test set (131,535 samples):**
+
+| Model | Accuracy | F1 (weighted) | AUC-ROC (macro) | MCC |
+|-------|----------|---------------|-----------------|-----|
+| XGBoost | 93.39% | 0.9220 | 0.9899 | 0.8752 |
+| Random Forest | 90.77% | 0.9227 | 0.9851 | 0.8403 |
+| Hybrid Ensemble | 90.37% | 0.9196 | 0.9872 | 0.8353 |
+| DNN (Residual MLP) | 87.37% | 0.8999 | 0.9858 | 0.7918 |
+| CatBoost | 87.16% | 0.9003 | 0.9863 | 0.7870 |
+
+Macro F1 scores are lower (0.53-0.62) because ultra-minority classes like Worms (35 test samples) and Backdoor (466) drag the unweighted average down — this is expected and honest on a severely imbalanced dataset. The AUC-ROC scores above 0.985 across all models indicate strong discriminative ability across all 10 classes regardless of class size.
+
+The autoencoder (Layer 4) was trained exclusively on normal traffic. At the operational threshold, it achieves a 3% false positive rate while producing a mean reconstruction error on attack traffic (11.89 MSE) that is 245 times higher than on normal traffic (0.048 MSE), giving the anomaly engine a clear separation signal for zero-day detection.
+
 ## Download
 
 **[Download Bastion IDS Setup 2.0.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
