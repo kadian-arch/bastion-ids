@@ -57,7 +57,7 @@ Network traffic
 
 **Trained on:** UNSW-NB15 (Australian Centre for Cyber Security) 49 features, 9 attack categories.
 
-**Performance (batch analysis on labelled data):**
+**Performance (batch analysis on labelled data) can be tuned and retrained on context-based traffic which improves overall performance on the monitored network:**
 
 | Metric | Score |
 |--------|-------|
@@ -181,7 +181,7 @@ Every alert can be reviewed directly in the Threat Intelligence page. Analysts c
 
 ## Project background
 
-This started as a final year B.Tech project at the University of Buea (Network & Security, class of 2026). The goal was to go beyond simple signature matching and build something closer to how real enterprise IDS tools work layered detection, no single point of failure, and a UI that makes the data readable.
+This started as a final year project at the University of Buea (Network & Security). The goal was to go beyond simple signature matching and build something closer to how real enterprise IDS tools work layered detection, no single point of failure, and a UI that makes the data readable.
 
 The source code is publicly available. If you're a researcher, a student, or someone who wants to understand how layered network detection works under the hood, everything is here.
 
@@ -198,15 +198,15 @@ Windows Defender is quarantining files mid-extraction. Before running the instal
 The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall. A corrupted installation is the most likely cause.
 
 **Live packet capture shows no traffic**
-Npcap is required for live capture. If the installer did not install it automatically, download it from [npcap.com](https://npcap.com) and install it manually, then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, raw packet capture is blocked by Windows.
+Npcap is required for live capture. If the installer did not install it automatically, download it from [npcap.com](https://npcap.com) and install it manually, then restart Bastion IDS. Also confirm the app is running as Administrator. Without admin rights, raw packet capture is blocked by Windows.
 
 **First launch takes 2-3 minutes**
 Normal. The AI models (TensorFlow, XGBoost, CatBoost) load from disk on first launch. Subsequent launches are faster once Windows caches the files.
 
 **The app installed but will not open at all**
-Make sure you are on Windows 10 (build 1903 or later) or Windows 11. Windows 7/8 are not supported. Also confirm your machine has at least 4 GB of free RAM — the full model stack needs headroom to load.
+Make sure you are on Windows 10 (build 1903 or later) or Windows 11. Windows 7/8 are not supported. Also confirm your machine has at least 4 GB of free RAM. The full model stack needs headroom to load.
 
-If none of the above resolves your issue, open a GitHub issue with your `%TEMP%\BastionIDS-launch.log` attached, or email directly for one-on-one support: **donalsienkum@gmail.com**
+If none of the above resolves your issue, open a GitHub issue with your `%TEMP%\BastionIDS-launch.log` attached, or email directly for one-on-one support: **kadian.security@gmail.com**
 
 ---
 
@@ -223,4 +223,4 @@ Proprietary. Free to download and use for network security monitoring. Redistrib
 
 ---
 
-*Built by [Kum Donalsien Akwo](https://github.com/kadian-arch) · Kadian Inc · 2026*
+*Built by [K. Donalsien](https://github.com/kadian-arch) · Kadian Inc · 2026*
