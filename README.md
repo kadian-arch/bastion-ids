@@ -57,6 +57,14 @@ Network traffic
 
 **Trained on:** UNSW-NB15 (Australian Centre for Cyber Security) 49 features, 9 attack categories.
 
+**Performance (batch analysis on labelled data):**
+
+| Metric | Score |
+|--------|-------|
+| Accuracy | 85.6% |
+| Precision | 94.9% |
+| F1 Score | 0.89 |
+
 ## Download
 
 **[Download Bastion IDS Setup 2.0.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
@@ -109,7 +117,7 @@ npm run dev
 
 Bastion is a **Network Intrusion Detection System (NIDS)**. It monitors traffic and raises alerts. It does not block anything on its own.
 
-The dashboard includes response controls (port quarantine, IP blocking) that are designed to work alongside a firewall or network enforcement device. Without that integration they show intent — with it they trigger real action. This is the standard architecture: detection and enforcement are separate. Tools like Suricata and Zeek work the same way.
+The dashboard includes response controls (port quarantine, IP blocking) designed to work alongside a firewall or network enforcement device. Without that integration they show intent; with it they trigger real action.
 
 
 ## Dashboard pages
@@ -126,7 +134,25 @@ The dashboard includes response controls (port quarantine, IP blocking) that are
 
 **System Health**: CPU, RAM, storage, and network I/O gauges, updated every 3 seconds.
 
-**Command & Control**: Admin panel for user management and access governance.
+**Command & Control**: Admin panel for policy controls, settings, API key rotation, alert archiving, and engine management.
+
+Every alert carries a MITRE ATT&CK technique mapping. Live capture sessions can be exported as CSV or PCAP (Wireshark-compatible) directly from the dashboard.
+
+## Protective controls
+
+**Auto-Isolate**: Automatically blocks threat source IPs at the Windows Firewall level the moment an alert fires, both inbound and outbound.
+
+**Ghost Protocol**: Blocks ICMP echo so the host does not respond to ping, reducing visibility to network scanners.
+
+**Stealth Mode**: Blocks mDNS (UDP 5353), hiding the host from network discovery tools.
+
+**Emergency Lockdown**: Hard stop on all capture, analysis, and file upload operations until manually released.
+
+All controls are toggled from the Command & Control page and take effect immediately without restart.
+
+## Analyst feedback and model retraining
+
+Every alert can be reviewed directly in the Threat Intelligence page. Analysts can mark verdicts as true or false positives, add investigation notes, and correct wrong labels. The accumulated feedback exports as a CSV dataset for use in retraining the ML models on your specific network environment.
 
 
 ## Screenshots
