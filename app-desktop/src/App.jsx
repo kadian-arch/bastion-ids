@@ -1,8 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Upload, BarChart3, Globe, Heart, Settings,
-  LayoutDashboard, ShieldCheck, Radio, X, ChevronRight
+  LayoutDashboard, ShieldCheck, Radio, X, ChevronRight,
+  Minus, Square, Maximize2
 } from 'lucide-react';
+
+// Window control helpers — talk to Electron main process via IPC.
+// Safe to call in browser (ipcRenderer will be undefined) — the buttons just do nothing.
+const ipc = (() => {
+  try { return window.require('electron').ipcRenderer; } catch { return null; }
+})();
+const winMin   = () => ipc && ipc.send('window-minimize');
+const winMax   = () => ipc && ipc.send('window-maximize');
+const winClose = () => ipc && ipc.send('window-close');
 
 // ── BASTION™ Trademark Logo ───────────────────────────────────────────────────
 // THE BASTION MARK — an all-seeing sentinel eye inside a precision targeting ring.
@@ -240,7 +250,41 @@ export default function App() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-300 font-mono overflow-hidden">
+    <div className="flex flex-col h-screen bg-slate-950 text-slate-300 font-mono overflow-hidden">
+
+      {/* ── Custom titlebar (frame:false window — replaces native OS chrome) ── */}
+      <div
+        className="h-8 bg-slate-900 border-b border-slate-800/80 flex items-center justify-end px-3 shrink-0 select-none"
+        style={{ WebkitAppRegion: 'drag' }}
+      >
+        {/* Window controls — right side (no-drag so clicks register) */}
+        <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' }}>
+          <button
+            onClick={winMin}
+            className="w-6 h-6 flex items-center justify-center rounded text-slate-600 hover:text-slate-300 hover:bg-slate-700/60 transition-colors"
+            title="Minimise"
+          >
+            <Minus size={10} />
+          </button>
+          <button
+            onClick={winMax}
+            className="w-6 h-6 flex items-center justify-center rounded text-slate-600 hover:text-slate-300 hover:bg-slate-700/60 transition-colors"
+            title="Maximise / Restore"
+          >
+            <Square size={9} />
+          </button>
+          <button
+            onClick={winClose}
+            className="w-6 h-6 flex items-center justify-center rounded text-slate-600 hover:text-red-400 hover:bg-red-950/60 transition-colors"
+            title="Close"
+          >
+            <X size={10} />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Main layout (sidebar + content) fills the remaining height ── */}
+      <div className="flex flex-1 overflow-hidden">
 
       {/* ══ SIDEBAR ══════════════════════════════════════════════════════════ */}
       <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col z-20 shadow-2xl shrink-0">
@@ -450,6 +494,7 @@ export default function App() {
           </div>
         </div>
       )}
+      </div>{/* end main layout flex row */}
     </div>
   );
 }

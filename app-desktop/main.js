@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import net from 'net';
+import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -35,43 +36,119 @@ const BACKEND_PORT = 48217;            // Bastion API (uncommon, conflict-safe)
 const BACKEND_URL  = `http://127.0.0.1:${BACKEND_PORT}`;
 const DEV_URL      = 'http://localhost:48218';   // Vite dev server (development only)
 
-/** Check whether the Bastion backend port is already bound and listening. */
-function isBackendRunning() {
+/** TCP check — just tells us if something is bound to the port already. */
+function isPortOpen() {
   return new Promise((resolve) => {
     const client = new net.Socket();
     client.setTimeout(800);
-    client.connect(BACKEND_PORT, '127.0.0.1', () => {
-      client.destroy();
-      resolve(true);   // something is already listening
-    });
-    client.on('error', () => { client.destroy(); resolve(false); });
+    client.connect(BACKEND_PORT, '127.0.0.1', () => { client.destroy(); resolve(true); });
+    client.on('error',   () => { client.destroy(); resolve(false); });
     client.on('timeout', () => { client.destroy(); resolve(false); });
   });
 }
 
-/** Poll until the backend is accepting connections, or until timeout (ms). */
-async function waitForBackend(timeoutMs = 120000) {
+/**
+ * HTTP check — confirms the backend is actually serving HTTP responses.
+ * The port can be open (TCP) while FastAPI is still loading models;
+ * a real HTTP 200 means it's ready to serve the UI.
+ */
+function isBackendReady() {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port: BACKEND_PORT, path: '/api/v1/health',
+        headers: { 'x-authority': 'BASTION-KADIAN-SEC-0x42' }, timeout: 2000 },
+      (res) => { resolve(res.statusCode < 500); }
+    );
+    req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
+/** Status messages shown on the splash screen at timed intervals (ms elapsed). */
+const SPLASH_MESSAGES = [
+  [0,      'Starting detection engine...'],
+  [8000,   'Loading signature database — 47,357 rules...'],
+  [20000,  'Initialising ML models (RF + XGBoost + CatBoost)...'],
+  [40000,  'Loading deep neural network specialist...'],
+  [55000,  'Loading anomaly sentinel (Autoencoder + IForest)...'],
+  [75000,  'Almost there — finalising engine startup...'],
+  [100000, 'Still loading — large models take time on first run. Hang tight...'],
+  [140000, 'Nearly ready. Thank you for your patience...'],
+];
+
+/**
+ * Poll until the backend passes an HTTP health check, or until timeout.
+ * Updates the splash message automatically as time passes.
+ */
+async function waitForBackend(timeoutMs = 180000) {
   const start = Date.now();
+  let msgIdx = 0;
   while (Date.now() - start < timeoutMs) {
-    if (await isBackendRunning()) return true;
-    await new Promise((r) => setTimeout(r, 600));
+    const elapsed = Date.now() - start;
+    // Advance the message when the next time-threshold is crossed
+    while (msgIdx < SPLASH_MESSAGES.length - 1 &&
+           elapsed >= SPLASH_MESSAGES[msgIdx + 1][0]) {
+      msgIdx++;
+      updateSplashMsg(SPLASH_MESSAGES[msgIdx][1]);
+    }
+    if (await isBackendReady()) return true;
+    await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
 }
 
-/** Branded loading screen shown while the detection engine initialises. */
-function splashHtml(msg) {
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
-    <html><body style="margin:0;height:100vh;display:flex;flex-direction:column;
-      align-items:center;justify-content:center;background:#0d2b55;color:#fff;
-      font-family:Segoe UI,Arial,sans-serif;-webkit-user-select:none;">
-      <div style="font-size:46px;font-weight:800;letter-spacing:1px;">BASTION <span style="color:#c99a06;">IDS</span></div>
-      <div style="margin-top:6px;color:#aac4e0;font-size:14px;">by Kadian Inc</div>
-      <div style="margin-top:34px;width:240px;height:4px;background:#102a4d;border-radius:4px;overflow:hidden;">
-        <div style="width:40%;height:100%;background:#c99a06;animation:l 1.1s infinite ease-in-out;"></div></div>
-      <div style="margin-top:18px;color:#7d93b3;font-size:13px;">${msg}</div>
-      <style>@keyframes l{0%{margin-left:-40%}100%{margin-left:100%}}</style>
-    </body></html>`);
+/** Branded loading screen — professional animated splash with updateable status line. */
+function splashHtml(initialMsg = 'Starting detection engine...') {
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{height:100vh;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;background:#080f1c;color:#fff;
+  font-family:'Segoe UI',system-ui,sans-serif;-webkit-user-select:none;
+  -webkit-app-region:drag;position:relative;overflow:hidden}
+.bg-grid{position:absolute;inset:0;opacity:0.04;
+  background-image:linear-gradient(#00c8ff 1px,transparent 1px),
+  linear-gradient(90deg,#00c8ff 1px,transparent 1px);
+  background-size:40px 40px}
+.logo{font-size:40px;font-weight:900;letter-spacing:3px;position:relative;z-index:1}
+.logo span{color:#c99a06}
+.by{margin-top:6px;font-size:10px;color:#2d4a6a;letter-spacing:5px;
+  text-transform:uppercase;position:relative;z-index:1}
+.rings{margin-top:44px;position:relative;width:64px;height:64px;z-index:1}
+.r1{position:absolute;inset:0;border:2px solid #0d2a4a;border-top:2px solid #c99a06;
+  border-radius:50%;animation:sp .9s linear infinite}
+.r2{position:absolute;inset:10px;border:1.5px solid #0d2a4a;border-top:1.5px solid #00c8ff;
+  border-radius:50%;animation:sp .6s linear infinite reverse}
+.r3{position:absolute;inset:22px;border:1px solid #0d2a4a;border-top:1px solid #c99a06;
+  border-radius:50%;animation:sp .4s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.bar-wrap{margin-top:36px;width:300px;height:2px;background:#0d1f38;
+  border-radius:2px;overflow:hidden;z-index:1}
+.bar{height:100%;width:35%;background:linear-gradient(90deg,transparent,#c99a06,#00c8ff,transparent);
+  animation:sweep 2s ease-in-out infinite;border-radius:2px}
+@keyframes sweep{0%{margin-left:-35%}100%{margin-left:100%}}
+.msg{margin-top:20px;font-size:11px;color:#3a5a7a;letter-spacing:1.5px;
+  text-align:center;min-height:18px;z-index:1;transition:opacity .4s}
+.footer{position:absolute;bottom:20px;font-size:8px;color:#141e2e;
+  letter-spacing:4px;text-transform:uppercase}
+</style></head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="logo">BASTION <span>IDS</span></div>
+  <div class="by">by Kadian Inc</div>
+  <div class="rings"><div class="r1"></div><div class="r2"></div><div class="r3"></div></div>
+  <div class="bar-wrap"><div class="bar"></div></div>
+  <div class="msg" id="msg">${initialMsg}</div>
+</body></html>`);
+}
+
+/** Update the status line on the splash without reloading the whole page. */
+function updateSplashMsg(msg) {
+  if (win && !win.isDestroyed()) {
+    win.webContents.executeJavaScript(
+      `var el=document.getElementById('msg');if(el){el.style.opacity=0;setTimeout(()=>{el.textContent=${JSON.stringify(msg)};el.style.opacity=1},200)}`
+    ).catch(() => {});
+  }
 }
 
 async function createWindow() {
@@ -101,10 +178,20 @@ async function createWindow() {
   // Safety net: force-show after 2s even if ready-to-show never fires.
   setTimeout(() => { try { if (win && !win.isVisible()) win.show(); } catch {} }, 2000);
 
+  // ── Window control IPC (custom titlebar — frame:false) ─────────────────
+  ipcMain.removeAllListeners('window-minimize');
+  ipcMain.removeAllListeners('window-maximize');
+  ipcMain.removeAllListeners('window-close');
+  ipcMain.on('window-minimize', () => { try { win && win.minimize(); } catch {} });
+  ipcMain.on('window-maximize', () => {
+    try { if (win) win.isMaximized() ? win.unmaximize() : win.maximize(); } catch {}
+  });
+  ipcMain.on('window-close', () => { try { win && win.close(); } catch {} });
+
   // ── Start the backend if nothing is already listening ──────────────────
   // If the user launched the admin backend separately, reuse it. Otherwise
   // spawn the bundled engine (packaged) or system python (development).
-  const alreadyUp = await isBackendRunning();
+  const alreadyUp = await isPortOpen();
   if (!alreadyUp) {
     let pyExe, apiPath, cwd;
     if (app.isPackaged) {
@@ -138,14 +225,20 @@ async function createWindow() {
       if (code !== 0 && _errBuf) logLaunch('backend stderr tail: ' + _errBuf.slice(-1500));
     });
 
-    // Wait until the engine is actually accepting connections (models load in ~30-60s).
-    const ready = await waitForBackend(150000);
+    // Wait until the backend passes a real HTTP health check.
+    // Dynamic splash messages update automatically inside waitForBackend.
+    const ready = await waitForBackend(180000);
     logLaunch(`waitForBackend -> ${ready}`);
     if (!ready) {
-      win.loadURL(splashHtml('Engine is taking longer than expected. Please wait...'));
+      updateSplashMsg('Engine failed to start. Check BastionIDS-launch.log in your Temp folder.');
+      logLaunch('Backend did not become ready within timeout — staying on splash.');
+      return; // Don't load the UI — backend isn't running
     }
   } else {
-    console.log('[Electron] Backend already running on :' + BACKEND_PORT + ' — reusing it');
+    logLaunch('[Electron] Backend already running on :' + BACKEND_PORT + ' — reusing it');
+    updateSplashMsg('Detection engine found — connecting...');
+    // Still do one HTTP check to confirm it's serving properly
+    await waitForBackend(30000);
   }
 
   // ── Download handler (will-download) ───────────────────────────────────────
