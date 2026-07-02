@@ -5,6 +5,8 @@
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
 
+![Bastion IDS Demo](docs/screenshots/demo.gif)
+
 A network intrusion detection system that combines signature matching, machine learning, deep learning, and behavioural anomaly detection into one pipeline. Built from scratch. Ships with a real-time SOC-style dashboard.
 
 ![Bastion IDS Dashboard](docs/screenshots/ops_center.png)
