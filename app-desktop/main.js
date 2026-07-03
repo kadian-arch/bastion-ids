@@ -13,13 +13,16 @@ let backendProcess = null;
 let win = null;   // module-level so ipcMain handlers can reference it
 
 // ── Startup logging (diagnoses launch failures on clean machines/VMs) ───────
-const LAUNCH_LOG = path.join(os.tmpdir(), 'BastionIDS-launch.log');
+const LAUNCH_LOG   = path.join(os.tmpdir(), 'BastionIDS-launch.log');
+const BACKEND_LOG  = path.join(os.tmpdir(), 'BastionIDS-backend.log');
 function logLaunch(msg) {
   try {
     fs.appendFileSync(LAUNCH_LOG,
       `[${new Date().toISOString()}] ${msg}\n`);
   } catch { /* never let logging crash the app */ }
 }
+// Clear the backend log each launch so it only contains the current session.
+try { fs.writeFileSync(BACKEND_LOG, `=== Backend log ${new Date().toISOString()} ===\n`); } catch {}
 logLaunch(`=== Bastion IDS launch | packaged=${app.isPackaged} | ` +
           `platform=${process.platform} ${os.release()} | electron=${process.versions.electron} ===`);
 process.on('uncaughtException',  (e) => logLaunch('UNCAUGHT: ' + (e && e.stack || e)));
@@ -206,7 +209,10 @@ async function createWindow() {
     }
     logLaunch(`spawn backend: pyExe=${pyExe} | apiPath=${apiPath} | exists=${fs.existsSync(pyExe)}/${fs.existsSync(apiPath)}`);
     try {
-      backendProcess = spawn(pyExe, [apiPath], { cwd });
+      backendProcess = spawn(pyExe, [apiPath], {
+        cwd,
+        env: { ...process.env, PYTHONNOUSERSITE: '1' },
+      });
     } catch (e) {
       logLaunch('SPAWN FAILED: ' + (e && e.stack || e));
       win.loadURL(splashHtml('Engine failed to start. Check the launch log.'));
@@ -214,11 +220,16 @@ async function createWindow() {
     }
     backendProcess.on('error', (e) => logLaunch('backend spawn error: ' + e));
     let _errBuf = '';
-    backendProcess.stdout.on('data', (d) => process.stdout.write(`[API] ${d}`));
+    backendProcess.stdout.on('data', (d) => {
+      const s = d.toString();
+      process.stdout.write(`[API] ${s}`);
+      try { fs.appendFileSync(BACKEND_LOG, s); } catch {}
+    });
     backendProcess.stderr.on('data', (d) => {
       const s = d.toString();
       process.stderr.write(`[API-ERR] ${s}`);
       _errBuf += s; if (_errBuf.length > 4000) _errBuf = _errBuf.slice(-4000);
+      try { fs.appendFileSync(BACKEND_LOG, '[STDERR] ' + s); } catch {}
     });
     backendProcess.on('exit', (code) => {
       logLaunch(`backend exited code=${code}`);

@@ -1383,7 +1383,7 @@ async def health_check():
         "storage_usage":   float(disk.percent),
         "net_rx":          round(rx, 1),
         "net_tx":          round(tx, 1),
-        "uptime":          str(datetime.timedelta(seconds=int(now - psutil.boot_time()))),
+        "uptime":          str(datetime.timedelta(seconds=int(now - boot_time))),
         "signatures_active": ENGINE_STATUS.get("signatures_active", 0),
         "alerts_total":    alerts_total,
         "layers_active":   ENGINE_STATUS.get("layers_active", 0),

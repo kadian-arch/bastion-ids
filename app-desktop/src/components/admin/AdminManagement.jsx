@@ -210,7 +210,7 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
 
     // Commands that require word verification
     const CONFIRM_CMDS = ['PURGE_ALERTS', 'FLUSH_CACHE', 'FULL_RESTART'];
-    if (CONFIRM_CMDS.includes(cmd) && showConfirm?.action !== cmd) {
+    if (CONFIRM_CMDS.includes(cmd) && policies.mfaEnforce && showConfirm?.action !== cmd) {
       const word = pickWord();
       setShowConfirm({
         action: cmd,
