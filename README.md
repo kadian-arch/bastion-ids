@@ -93,11 +93,25 @@ Macro F1 scores are lower (0.53-0.62) because ultra-minority classes like Worms 
 
 The autoencoder (Layer 4) was trained exclusively on normal traffic. At the operational threshold, it achieves a 3% false positive rate while producing a mean reconstruction error on attack traffic (11.89 MSE) that is 245 times higher than on normal traffic (0.048 MSE), giving the anomaly engine a clear separation signal for zero-day detection.
 
+## System Requirements
+
+| Requirement | Minimum |
+|---|---|
+| OS | Windows 10 (build 1903 / version 1909) or Windows 11 |
+| CPU | 64-bit with AVX2 support — Intel Haswell (2013) or newer, AMD Ryzen (2017) or newer |
+| RAM | 4 GB minimum — 8 GB recommended |
+| Storage | 4 GB free space |
+| Privileges | Administrator — required for live packet capture |
+
+> **Note on older CPUs:** Layer 3 (Deep Neural Network) runs on TensorFlow, which requires AVX2. On machines without it, the DNN layer is disabled but Layers 1, 2, and 4 continue to operate normally.
+
+The installer bundles Npcap and the Visual C++ 2022 Runtime and installs them automatically. No internet connection is required after downloading the installer.
+
 ## Download
 
 **[Download Bastion IDS Setup 2.0.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
 
-The installer includes all trained models and everything needed to run. Requires Npcap for live packet capture (free download, the installer will prompt you).
+The installer includes all trained models, the Python runtime, Npcap, and the Visual C++ Runtime. Everything needed to run is bundled — no additional downloads required.
 
 ## Running from source
 
@@ -225,8 +239,21 @@ Windows Defender is quarantining files mid-extraction. Before running the instal
 **"Engine failed to start" on the splash screen**
 The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall. A corrupted installation is the most likely cause.
 
+**Layer 3 (DNN) shows offline / "TensorFlow failed to load"**
+Two possible causes:
+
+1. **Visual C++ 2022 Runtime is missing.** Download and install it, then restart Bastion IDS:
+   [vc_redist.x64.exe — Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+
+2. **Your CPU does not support AVX2.** TensorFlow requires AVX2 instructions, available on Intel Haswell (2013) and newer, and AMD Ryzen (2017) and newer. If your CPU predates these, Layer 3 cannot run on your machine. Layers 1, 2, and 4 remain fully operational.
+
+To confirm which applies, run this in PowerShell and check the CPU name against your processor's release year:
+```powershell
+(Get-WmiObject -Class Win32_Processor).Name
+```
+
 **Live packet capture shows no traffic**
-Npcap is required for live capture. If the installer did not install it automatically, download it from [npcap.com](https://npcap.com) and install it manually, then restart Bastion IDS. Also confirm the app is running as Administrator. Without admin rights, raw packet capture is blocked by Windows.
+The installer automatically installs Npcap. If it was skipped or removed, download and install it manually from [npcap.com](https://npcap.com), then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, raw packet capture is blocked by Windows.
 
 **First launch takes 2-3 minutes**
 Normal. The AI models (TensorFlow, XGBoost, CatBoost) load from disk on first launch. Subsequent launches are faster once Windows caches the files.
