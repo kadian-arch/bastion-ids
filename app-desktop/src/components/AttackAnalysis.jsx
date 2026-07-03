@@ -590,6 +590,30 @@ function DetectionLog({
   const [generating, setGenerating]   = useState(false);
   const [page, setPage]               = useState(1);
   const [syncPulsing, setSyncPulsing] = useState(false);
+  const [showArchiveView, setShowArchiveView] = useState(false);
+  const [archivedAlerts, setArchivedAlerts]   = useState([]);
+  const [archiveLoading, setArchiveLoading]   = useState(false);
+  const [archivePage, setArchivePage]         = useState(1);
+  const ARCHIVE_PAGE_SIZE = 50;
+
+  const fetchArchiveAlerts = useCallback(async (pageNum = 1) => {
+    setArchiveLoading(true);
+    try {
+      const offset = (pageNum - 1) * ARCHIVE_PAGE_SIZE;
+      const res = await fetch(`${API_URL}/alerts/archive?limit=${ARCHIVE_PAGE_SIZE}&offset=${offset}`, { headers: HDR });
+      if (res.ok) {
+        const d = await res.json();
+        setArchivedAlerts(d.alerts || []);
+        setArchivePage(pageNum);
+      }
+    } catch {}
+    setArchiveLoading(false);
+  }, []);
+
+  const openArchive = () => {
+    setShowArchiveView(true);
+    fetchArchiveAlerts(1);
+  };
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
@@ -699,9 +723,9 @@ function DetectionLog({
         onReportsRefresh();
         setShowReports(true);
       } else {
-        notify("Report generation failed — check backend", 'alert');
+        notify("Report generation failed. Please restart Bastion IDS and try again.", 'alert');
       }
-    } catch { notify("Cannot reach backend for report generation", 'alert'); }
+    } catch { notify("Report generation unavailable. Ensure Bastion IDS is running and try again.", 'alert'); }
     setGenerating(false);
   };
 
@@ -804,16 +828,90 @@ function DetectionLog({
                 : `${archiveStats.size_kb} KB`}
             </span>
           </div>
-          <button
-            onClick={onClearArchive}
-            disabled={archiveBusy}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest
-              text-red-400 border border-red-500/20 hover:bg-red-950/30 hover:border-red-500/40 transition-all
-              disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <XCircle size={12} />
-            Clear Archive
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={openArchive}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest
+                text-emerald-400 border border-emerald-500/30 hover:bg-emerald-950/40 hover:border-emerald-500/50 transition-all"
+            >
+              <Eye size={12} />
+              View Archive
+            </button>
+            <button
+              onClick={onClearArchive}
+              disabled={archiveBusy}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest
+                text-red-400 border border-red-500/20 hover:bg-red-950/30 hover:border-red-500/40 transition-all
+                disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <XCircle size={12} />
+              Clear Archive
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ARCHIVE VIEWER MODAL */}
+      {showArchiveView && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setShowArchiveView(false)}>
+          <div className="bg-[#0d1117] border border-emerald-500/30 rounded-2xl w-full max-w-5xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <Database size={16} className="text-emerald-400" />
+                <span className="text-[11px] font-black text-emerald-400 uppercase tracking-widest">Permanent Alert Archive</span>
+                {archiveStats && (
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {archiveStats.total.toLocaleString()} total · {archiveStats.size_kb >= 1024 ? `${(archiveStats.size_kb/1024).toFixed(1)} MB` : `${archiveStats.size_kb} KB`}
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setShowArchiveView(false)} className="text-slate-500 hover:text-white transition-colors">
+                <XCircle size={18} />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {archiveLoading ? (
+                <div className="flex items-center justify-center h-32 text-slate-500 text-xs font-mono">Loading archive...</div>
+              ) : archivedAlerts.length === 0 ? (
+                <div className="flex items-center justify-center h-32 text-slate-600 text-xs font-mono">Archive is empty</div>
+              ) : (
+                <div className="space-y-2">
+                  {archivedAlerts.map((a, i) => (
+                    <div key={a.id ?? i} className="bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-3 flex items-center gap-4">
+                      <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${a.severity === 'HIGH' ? 'bg-red-950/50 text-red-400 border border-red-500/30' : 'bg-amber-950/50 text-amber-400 border border-amber-500/30'}`}>
+                        {a.severity || 'MED'}
+                      </span>
+                      <span className="text-[10px] font-mono text-cyan-400 shrink-0">{a.srcip || a.Source}:{a.sport || a.src_port || 0}</span>
+                      <span className="text-slate-600 text-xs">→</span>
+                      <span className="text-[10px] font-mono text-slate-300 shrink-0">{a.dstip || a.Destination}:{a.dport || a.dst_port || 0}</span>
+                      <span className="text-[10px] text-slate-400 flex-1 truncate">{a.verdict || a.Info}</span>
+                      <span className="text-[9px] text-slate-600 font-mono shrink-0">{(a.timestamp || a.Time || '').slice(0,19).replace('T',' ')}</span>
+                      <span className="text-[9px] font-mono text-violet-400 shrink-0">{a.source_engine || a.engine || ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {archiveStats?.total > ARCHIVE_PAGE_SIZE && (
+              <div className="flex items-center justify-center gap-4 px-6 py-3 border-t border-slate-800">
+                <button
+                  disabled={archivePage <= 1 || archiveLoading}
+                  onClick={() => fetchArchiveAlerts(archivePage - 1)}
+                  className="text-[10px] font-black uppercase text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed px-3 py-1 border border-slate-700 rounded-lg transition-colors"
+                >
+                  Prev
+                </button>
+                <span className="text-[10px] text-slate-500 font-mono">Page {archivePage} of {Math.ceil(archiveStats.total / ARCHIVE_PAGE_SIZE)}</span>
+                <button
+                  disabled={archivePage >= Math.ceil(archiveStats.total / ARCHIVE_PAGE_SIZE) || archiveLoading}
+                  onClick={() => fetchArchiveAlerts(archivePage + 1)}
+                  className="text-[10px] font-black uppercase text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed px-3 py-1 border border-slate-700 rounded-lg transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1258,10 +1356,10 @@ function DeepDiveReport({ alert, onBack, notify, onReportsRefresh }) {
           notify(`${fmt.toUpperCase()} report created`, 'success');
         }
       } else {
-        notify(`Report generation failed (${res.status})`, 'alert');
+        notify("Report generation failed. Please restart Bastion IDS and try again.", 'alert');
       }
     } catch {
-      notify("Cannot reach backend — is api_server.py running?", 'alert');
+      notify("Report generation unavailable. Ensure Bastion IDS is running and try again.", 'alert');
     }
     setIsExporting(null);
   };
@@ -1309,9 +1407,9 @@ function DeepDiveReport({ alert, onBack, notify, onReportsRefresh }) {
     }
 
     if (succeeded) {
-      notify(`HOST QUARANTINED — ${alert.source} isolation active. Bastion BPF filter applied.`, 'alert');
+      notify(`HOST QUARANTINED — ${alert.source} blocked via Windows Firewall (inbound + outbound).`, 'alert');
     } else {
-      notify(`Quarantine logged locally — could not reach backend`, 'alert');
+      notify(`Quarantine could not be applied. Ensure Bastion IDS is running as Administrator.`, 'alert');
     }
   };
 

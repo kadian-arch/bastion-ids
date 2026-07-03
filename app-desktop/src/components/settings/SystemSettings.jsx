@@ -9,9 +9,10 @@ import {
 const API = 'http://localhost:48217/api/v1';
 const HDR = { 'x-authority': 'BASTION-KADIAN-SEC-0x42' };
 
-// ── Inline toast ─────────────────────────────────────────────────────────────
+const VERIFY_WORDS = ['CONFIRM','EXECUTE','PROCEED','AUTHORIZE','VALIDATE','APPROVE'];
+
 function useToast() {
-  const [toast, setToast] = useState(null); // { type: 'ok'|'err'|'warn', msg: '' }
+  const [toast, setToast] = useState(null);
   const show = useCallback((type, msg) => {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 4500);
@@ -41,18 +42,60 @@ function Toast({ toast }) {
   );
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Word-verification dialog for destructive commands ─────────────────────────
+function ConfirmDialog({ action, word, onConfirm, onCancel }) {
+  const [input, setInput] = useState('');
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-slate-950 border border-red-800 rounded-lg p-6 w-80 shadow-2xl font-mono">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle size={16} className="text-red-400" />
+          <span className="text-red-400 text-xs font-black uppercase tracking-widest">Confirm Destructive Action</span>
+        </div>
+        <p className="text-slate-400 text-[10px] mb-4 leading-relaxed">
+          This action is irreversible. Type <span className="text-white font-black">{word}</span> to confirm.
+        </p>
+        <input
+          autoFocus
+          value={input}
+          onChange={e => setInput(e.target.value.toUpperCase())}
+          placeholder={`Type ${word}`}
+          className="w-full bg-slate-900 border border-slate-700 p-2 rounded text-xs text-white font-mono
+            outline-none focus:border-red-500 mb-4 tracking-widest"
+        />
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2 bg-slate-800 text-slate-300 rounded text-[10px] font-bold uppercase
+              hover:bg-slate-700 transition-colors border border-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={input !== word}
+            onClick={onConfirm}
+            className="flex-1 py-2 bg-red-700 text-white rounded text-[10px] font-bold uppercase
+              hover:bg-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Execute
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SystemSettings() {
   const [isLoading,    setIsLoading]    = useState(true);
   const [isCommitting, setIsCommitting] = useState(false);
   const [config,       setConfig]       = useState({});
   const [initialConfig,setInitialConfig]= useState({});
   const [hasChanges,   setHasChanges]   = useState(false);
-  const [busy,         setBusy]         = useState({});  // { [actionKey]: true }
+  const [busy,         setBusy]         = useState({});
   const [lockdownMode, setLockdownMode] = useState(false);
+  const [confirm,      setConfirm]      = useState(null); // { key, word, action }
   const { toast, ok, err, warn } = useToast();
 
-  // ── Load settings ──────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
@@ -61,7 +104,7 @@ export default function SystemSettings() {
         setConfig(data);
         setInitialConfig(data);
       } catch {
-        err('Backend unreachable — settings could not be loaded.');
+        err('Settings could not be loaded. Ensure Bastion IDS is running.');
       } finally {
         setIsLoading(false);
       }
@@ -74,22 +117,20 @@ export default function SystemSettings() {
     setHasChanges(JSON.stringify(next) !== JSON.stringify(initialConfig));
   };
 
-  // ── Commit config changes ──────────────────────────────────────────────────
   const handleCommit = async () => {
     setIsCommitting(true);
     try {
       await axios.post(`${API}/settings/update`, config, { headers: HDR });
       setInitialConfig(config);
       setHasChanges(false);
-      ok('Configuration committed to backend.');
+      ok('Configuration saved successfully.');
     } catch {
-      err('Failed to commit settings — check backend connection.');
+      err('Failed to save settings. Please try again.');
     } finally {
       setIsCommitting(false);
     }
   };
 
-  // ── Generic action runner with per-button busy state ──────────────────────
   const runAction = async (key, endpoint, method = 'post', successMsg, opts = {}) => {
     if (busy[key]) return;
     setBusy(b => ({ ...b, [key]: true }));
@@ -98,12 +139,23 @@ export default function SystemSettings() {
       const res = await fn(`${API}${endpoint}`, opts.body ?? {}, { headers: HDR });
       if (opts.onSuccess) opts.onSuccess(res.data);
       ok(successMsg ?? res.data?.message ?? 'Action completed.');
-    } catch (e) {
-      const detail = e?.response?.data?.detail ?? e?.message ?? 'Unknown error';
-      err(`Failed: ${detail}`);
+    } catch {
+      err('Action could not be completed. Please try again.');
     } finally {
       setBusy(b => ({ ...b, [key]: false }));
     }
+  };
+
+  // ── Wrap destructive actions with word-verification challenge ─────────────
+  const runDestructive = (key, endpoint, method, successMsg, opts = {}) => {
+    const word = VERIFY_WORDS[Math.floor(Math.random() * VERIFY_WORDS.length)];
+    setConfirm({
+      word,
+      action: () => {
+        setConfirm(null);
+        runAction(key, endpoint, method, successMsg, opts);
+      },
+    });
   };
 
   if (isLoading) return (
@@ -116,6 +168,13 @@ export default function SystemSettings() {
   return (
     <div className="space-y-6 font-mono text-slate-300 pb-12">
       <Toast toast={toast} />
+      {confirm && (
+        <ConfirmDialog
+          word={confirm.word}
+          onConfirm={confirm.action}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex justify-between items-center bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-20">
@@ -129,7 +188,6 @@ export default function SystemSettings() {
             </span>
           )}
         </div>
-
         <div className="flex gap-3">
           <button
             disabled={!hasChanges}
@@ -169,7 +227,7 @@ export default function SystemSettings() {
                 onChange={v => handleUpdate('interface', v)}
               />
               <InputField
-                label="Log Retention (d)"
+                label="Log Retention (days)"
                 type="number"
                 value={config.retentionDays || 0}
                 onChange={v => handleUpdate('retentionDays', parseInt(v) || 0)}
@@ -189,8 +247,8 @@ export default function SystemSettings() {
               max={16384}
               onChange={v => handleUpdate('ramLimit', v)}
             />
-            <p className="text-[9px] text-slate-700 mt-2 leading-relaxed">
-              These limits are advisory — the backend will log a warning when thresholds are exceeded.
+            <p className="text-[9px] text-slate-600 mt-2 leading-relaxed">
+              Resource limits are advisory — the engine logs a warning when thresholds are exceeded.
             </p>
           </ConfigBlock>
         </div>
@@ -214,36 +272,36 @@ export default function SystemSettings() {
               onChange={v => handleUpdate('anomalyWeight', v)}
             />
             <ActionButton
-              label="Flush ML Buffer"
+              label="Flush Inference Cache"
               icon={<RefreshCw size={13}/>}
               loading={busy['mlreset']}
               onClick={() => runAction('mlreset', '/neural/reset', 'post',
-                'ML buffer flushed — models will reinitialise on next inference.')}
+                'Inference cache cleared. Models remain loaded.')}
               color="default"
             />
           </ConfigBlock>
 
           <ConfigBlock icon={<ShieldAlert size={16}/>} title="Mitigation Policies" color="text-amber-500">
             <ToggleRow
-              label="Auto-Quarantine Hosts"
-              desc="Block flagged IPs via Windows Firewall"
-              active={config.autoQuarantine}
-              onClick={() => handleUpdate('autoQuarantine', !config.autoQuarantine)}
+              label="Auto-Isolate Threats"
+              desc="Block flagged IPs via Windows Firewall on detection"
+              active={config.autoIsolate}
+              onClick={() => handleUpdate('autoIsolate', !config.autoIsolate)}
             />
             <ToggleRow
-              label="Geo-IP Blocking"
-              desc="Deny traffic from high-risk ASNs"
-              active={config.geoBlock}
-              onClick={() => handleUpdate('geoBlock', !config.geoBlock)}
+              label="Ghost Protocol"
+              desc="Suppress ICMP responses — hide this host from ping scanners"
+              active={config.ghostProtocol}
+              onClick={() => handleUpdate('ghostProtocol', !config.ghostProtocol)}
             />
             <ToggleRow
-              label="Engine Stealth Mode"
-              desc="Suppress ICMP responses from this host"
-              active={config.engineStealthMode}
-              onClick={() => handleUpdate('engineStealthMode', !config.engineStealthMode)}
+              label="Stealth Mode"
+              desc="Block mDNS (UDP 5353) — hide from network discovery tools"
+              active={config.stealthMode}
+              onClick={() => handleUpdate('stealthMode', !config.stealthMode)}
             />
-            <p className="text-[9px] text-slate-700 mt-1">
-              Toggle changes are staged — hit Commit to push to backend.
+            <p className="text-[9px] text-slate-600 mt-1">
+              Toggle changes are staged — hit Commit Changes to apply to the engine.
             </p>
           </ConfigBlock>
         </div>
@@ -269,14 +327,8 @@ export default function SystemSettings() {
               loading={busy['rollkey']}
               onClick={() => runAction(
                 'rollkey', '/roll-key', 'post',
-                'API key rotated — copy the new key from the field above.',
-                {
-                  onSuccess: (data) => {
-                    if (data?.new_key) {
-                      handleUpdate('apiKey', data.new_key);
-                    }
-                  }
-                }
+                'API key rotated. Copy the new key from the field above.',
+                { onSuccess: (data) => { if (data?.new_key) handleUpdate('apiKey', data.new_key); } }
               )}
               color="pink"
             />
@@ -285,28 +337,27 @@ export default function SystemSettings() {
           <ConfigBlock icon={<Database size={16}/>} title="Storage Operations" color="text-slate-400">
             <div className="grid grid-cols-2 gap-3 mb-3">
               <ActionButton
-                label="Optimize DB"
+                label="Compact Logs"
                 icon={<Database size={13}/>}
                 loading={busy['maint']}
-                onClick={() => runAction('maint', '/maint', 'post',
-                  'Database maintenance pass initiated.')}
+                onClick={() => runAction('maint', '/maint', 'post', null)}
                 color="default"
               />
               <ActionButton
                 label="Clear Alert Logs"
                 icon={<Trash2 size={13}/>}
                 loading={busy['flush']}
-                onClick={() => runAction('flush', '/flush', 'post',
-                  'Alert log cleared — session history reset to zero.')}
+                onClick={() => runDestructive('flush', '/flush', 'post',
+                  'Alert log cleared — session history reset.')}
                 color="amber"
               />
             </div>
             <ActionButton
-              label="Wipe Forensic Disk"
+              label="Wipe All Volatile Data"
               icon={<XCircle size={13}/>}
               loading={busy['wipe']}
-              onClick={() => runAction('wipe', '/wipe', 'post',
-                'Volatile forensic data wiped. Persistent logs unaffected.')}
+              onClick={() => runDestructive('wipe', '/wipe', 'post',
+                'All volatile data wiped. Persistent archive unaffected.')}
               color="red"
               full
             />
@@ -317,25 +368,25 @@ export default function SystemSettings() {
             <h4 className="flex items-center gap-2 text-xs font-bold text-red-400 uppercase tracking-widest mb-1">
               <Zap size={15} /> Urgent Directives
             </h4>
-            <p className="text-[9px] text-slate-700 mb-4">
-              Irreversible commands — confirm before executing.
+            <p className="text-[9px] text-slate-600 mb-4">
+              Irreversible commands — word verification required.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <ActionButton
-                label="Restart Node"
+                label="Restart Engine"
                 icon={<RefreshCw size={13}/>}
                 loading={busy['restart']}
                 onClick={() => runAction('restart', '/restart', 'post',
-                  'Restart acknowledged — close and reopen the launcher BAT to restart.')}
+                  'Restart signal sent. Close and reopen Bastion IDS to complete the restart.')}
                 color="default"
               />
               <ActionButton
                 label="Hard Lockdown"
                 icon={<Lock size={13}/>}
                 loading={busy['lockdown']}
-                onClick={() => runAction(
+                onClick={() => runDestructive(
                   'lockdown', '/lockdown', 'post',
-                  'LOCKDOWN EXECUTED — capture halted, buffers flushed, counters reset.',
+                  'LOCKDOWN ACTIVE — capture halted, buffers flushed.',
                   { onSuccess: () => setLockdownMode(true) }
                 )}
                 color="lockdown"
@@ -344,7 +395,7 @@ export default function SystemSettings() {
             {lockdownMode && (
               <div className="mt-3 p-2 bg-red-950/30 border border-red-900/40 rounded text-[9px]
                 text-red-400 font-mono">
-                System is in lockdown state. Restart the engine to resume normal operations.
+                System is in lockdown. Restart the engine to resume normal operations.
               </div>
             )}
           </div>
@@ -405,7 +456,7 @@ function ToggleRow({ label, desc, active, onClick }) {
     <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded mb-2.5">
       <div>
         <p className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">{label}</p>
-        {desc && <p className="text-[9px] text-slate-700 mt-0.5">{desc}</p>}
+        {desc && <p className="text-[9px] text-slate-600 mt-0.5">{desc}</p>}
       </div>
       <button
         onClick={onClick}
@@ -419,7 +470,6 @@ function ToggleRow({ label, desc, active, onClick }) {
   );
 }
 
-// colour variants — all static strings for Tailwind JIT
 const BTN_STYLES = {
   default:  'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200',
   amber:    'bg-amber-900/30 hover:bg-amber-900/60 border-amber-800/50 text-amber-300',

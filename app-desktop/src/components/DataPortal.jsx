@@ -446,6 +446,11 @@ export default function DataPortal({ lockdownActive }) {
             )}
           </div>
           <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileInput} accept=".pcap,.pcapng,.csv,.log" />
+
+          {/* ── File type capability note ─────────────────────────────────── */}
+          <div className="mt-3 p-3 bg-slate-900 border border-slate-800 rounded text-[9px] text-slate-500 leading-relaxed font-mono">
+            <span className="text-cyan-500 font-black">PCAP / PCAPNG / CSV / LOG</span> — All 4 detection layers active: Signature Engine, ML Ensemble, DNN Specialist, Anomaly Sentinel.
+          </div>
         </div>
 
         {/* ── DATASET PREVIEW + SWEEP ─────────────────────── */}

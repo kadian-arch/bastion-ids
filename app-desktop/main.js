@@ -284,6 +284,7 @@ async function createWindow() {
     item.once('done', (_e, state) => {
       if (state === 'completed') {
         shell.showItemInFolder(savePath);
+        if (win && !win.isDestroyed()) win.focus();
       } else if (state !== 'cancelled') {
         console.error(`[Download] failed — state: ${state}`);
       }
@@ -320,6 +321,7 @@ async function createWindow() {
     if (result.canceled || !result.filePath) return false;
     fs.writeFileSync(result.filePath, Buffer.from(buffer));
     shell.showItemInFolder(result.filePath);
+    if (win && !win.isDestroyed()) win.focus();
     return true;
   });
 

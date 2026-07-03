@@ -622,6 +622,11 @@ _alerts_disk_count: int = 0
 from collections import deque as _deque, defaultdict as _defaultdict
 _recent_alerts: _deque = _deque(maxlen=500)
 boot_time            = time.time()
+# Detection thresholds — live-updated from settings sliders (sigWeight/mlThreshold/anomalyWeight)
+_alert_threshold = 0.70   # sigWeight / 100
+_ml_threshold    = 0.60   # mlThreshold / 100
+_anomaly_gate    = 0.85   # 1.0 - anomalyWeight * 0.003 (higher weight = more sensitive = lower gate)
+_dpi_target      = ""     # IP under active DPI ("" = disabled)
 session_threat_count = 0   # threats flagged since this server process started
 session_flow_count   = 0   # flows analyzed (sweep rows) since boot
 session_layer_counts = {"SIGNATURE_DB": 0, "ML_ENSEMBLE": 0, "DL_LAYER": 0, "ANOMALY": 0}  # per-layer live-capture hits
@@ -908,7 +913,7 @@ class _LiveFlowTracker:
         is_anomaly = "ANOMALY" in eng or "SENTINEL" in eng
         with self._ev_lock:
             dq = self._evidence[src]
-            if conf >= 0.85:
+            if conf >= _anomaly_gate:
                 dq.append(now)
             while dq and dq[0] < now - 120.0:
                 dq.popleft()
@@ -922,7 +927,7 @@ class _LiveFlowTracker:
         if not LIVE_ML_ALERTS:
             if not is_sig:
                 return
-        elif not (is_sig or (is_anomaly and conf >= 0.85) or ml_corroborated):
+        elif not (is_sig or (is_anomaly and conf >= _anomaly_gate) or ml_corroborated):
             return
 
         ts_now = datetime.datetime.now().isoformat()
@@ -998,12 +1003,19 @@ _auto_isolated_ips: set = set()
 _isolated_lock = threading.Lock()
 
 def _load_policies_from_settings():
-    """Sync _active_policies from settings.json on startup."""
+    """Sync _active_policies and detection thresholds from settings.json on startup."""
+    global _alert_threshold, _ml_threshold, _anomaly_gate, _dpi_target
     s = _load_settings()
     with _policy_lock:
         for k in _active_policies:
             if k in s:
                 _active_policies[k] = bool(s[k])
+    # Clamp prevents dangerously low thresholds if sigWeight still holds the old
+    # "engine balance weight" value (default 25) from a pre-slider install.
+    _alert_threshold = max(0.50, min(0.95, s.get("sigWeight", 70) / 100.0))
+    _ml_threshold    = max(0.40, min(0.95, s.get("mlThreshold", 60) / 100.0))
+    _anomaly_gate    = max(0.70, min(0.99, 1.0 - s.get("anomalyWeight", 50) * 0.003))
+    _dpi_target      = s.get("dpi_target", "") if s.get("dpi_enabled") else ""
 
 def _apply_auto_isolate(ip: str):
     """
@@ -1286,7 +1298,8 @@ def _load_settings() -> dict:
         "sigWeight":25,"autoIsolate":False,"geoFence":False,
         "mfaEnforce":False,"stealthMode":False,"deepInspection":True,
         "ghostProtocol":False,"apiKey":CONFIG["AUTH_KEY"],
-        "logLevel":"INFO","alertThreshold":0.70,"anomalyThreshold":0.75
+        "logLevel":"INFO","alertThreshold":0.70,"anomalyThreshold":0.75,
+        "sigWeight":70,"mlThreshold":60,"anomalyWeight":50
     }
     try:
         if os.path.exists(CONFIG["SETTINGS_FILE"]):
@@ -2236,6 +2249,9 @@ def _process_packet_inner(pkt, loop):
             dst_ip.startswith("239.")       # local multicast
         )
 
+        # DPI: flag packets to/from the active DPI target IP
+        _is_dpi_pkt = bool(_dpi_target) and (src_ip == _dpi_target or dst_ip == _dpi_target)
+
         # ── Signature engine (Layer 1 — only layer suitable for per-packet) ──
         verdict, conf_val, source_engine = "NORMAL", 0.0, "BASTION_CLEAN"
         if not _is_broadcast_dst:
@@ -2277,7 +2293,7 @@ def _process_packet_inner(pkt, loop):
                     # traffic (fetch() calls, CDN lookups, etc.).  They add zero
                     # threat value in live-capture mode and generate UI noise.
                     _v = verdict.upper()
-                    if ("ET INFO " in _v or "ET POLICY " in _v or
+                    if not _is_dpi_pkt and ("ET INFO " in _v or "ET POLICY " in _v or
                             sig_ct.lower() in ("misc-activity", "not-suspicious")):
                         verdict = "NORMAL"; conf_val = 0.0; source_engine = "BASTION_CLEAN"
             except Exception:
@@ -2427,9 +2443,10 @@ def _process_packet_inner(pkt, loop):
         # Gated by deepInspection policy — when off, payload fields are cleared
         with _policy_lock:
             _dpi_on = _active_policies.get("deepInspection", True)
-        _pay = payload[:256] if _dpi_on else b""
-        pay_hex   = " ".join(f"{b:02x}" for b in _pay) if _dpi_on else ""
-        pay_ascii = "".join(chr(b) if 32 <= b < 127 else "." for b in _pay) if _dpi_on else ""
+        _pay_active = _dpi_on or _is_dpi_pkt
+        _pay = payload[:256] if _pay_active else b""
+        pay_hex   = " ".join(f"{b:02x}" for b in _pay) if _pay_active else ""
+        pay_ascii = "".join(chr(b) if 32 <= b < 127 else "." for b in _pay) if _pay_active else ""
         pay_len   = len(payload)
 
         pkt_info = {
@@ -2458,9 +2475,11 @@ def _process_packet_inner(pkt, loop):
             "udp_len": udp_len_v,
             # Payload
             "payload_hex": pay_hex, "payload_ascii": pay_ascii, "payload_len": pay_len,
+            "dpi_inspected": _is_dpi_pkt,
         }
 
-        if conf_val >= 0.70 and verdict.upper() not in ("NORMAL", "BASTION_CLEAN"):
+        _pkt_alert_thresh = _alert_threshold * 0.80 if _is_dpi_pkt else _alert_threshold
+        if conf_val >= _pkt_alert_thresh and verdict.upper() not in ("NORMAL", "BASTION_CLEAN"):
             ts_now = datetime.datetime.now().isoformat()
             _save_alert({**pkt_info, "id": pkt_no, "timestamp": ts_now})
             global session_threat_count, session_layer_counts
@@ -2795,9 +2814,9 @@ async def analyze_single_flow(request: Request,
                         experts.append({"name": name, "label": label, "conf": conf})
                     except Exception:
                         continue
-                malicious = [e for e in experts if e["label"].upper() != "NORMAL" and e["conf"] >= 0.70]
+                malicious = [e for e in experts if e["label"].upper() != "NORMAL" and e["conf"] >= _ml_threshold]
                 if len(malicious) < 2:
-                    soft = [e for e in experts if e["label"].upper() != "NORMAL" and e["conf"] >= 0.60]
+                    soft = [e for e in experts if e["label"].upper() != "NORMAL" and e["conf"] >= max(0.50, _ml_threshold - 0.10)]
                     if len(soft) >= 2:
                         lbls = [e["label"].upper() for e in soft]
                         if lbls.count(lbls[0]) >= 2:
@@ -3083,6 +3102,58 @@ def _run_analysis_pipeline(filename: str):
         except Exception as _ex:
             _upd(_err_preprocess=str(_ex))
 
+        # ── STEP 2.5: Vectorised Signature Scan (Layer 1) ────────────────────
+        # Runs port-based and flag-based rule matching across all rows using
+        # pandas vectorised ops — no per-row Python loop, so effectively free.
+        # Covers the main NMAP/scan/C2/brute-force patterns the Snort rules detect.
+        _upd(stage="signature_scan", pct=8)
+        sig_results = [None] * total
+        try:
+            _sc = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+            # Normalise column names to lower-case for consistent lookup
+            _sc.columns = [c.lower() for c in _sc.columns]
+            _sport = _sc.get("sport", _sc.get("src_port", pd.Series([0]*total)))
+            _dport = _sc.get("dsport", _sc.get("dport", _sc.get("dst_port", pd.Series([0]*total))))
+            _proto = _sc.get("proto", pd.Series(["tcp"]*total)).astype(str).str.lower()
+            _flags = _sc.get("tcp_flags_raw", _sc.get("tcp_flags", pd.Series([-1]*total)))
+
+            try: _sport = pd.to_numeric(_sport, errors="coerce").fillna(0).astype(int)
+            except: _sport = pd.Series([0]*total)
+            try: _dport = pd.to_numeric(_dport, errors="coerce").fillna(0).astype(int)
+            except: _dport = pd.Series([0]*total)
+            try: _flags = pd.to_numeric(_flags, errors="coerce").fillna(-1).astype(int)
+            except: _flags = pd.Series([-1]*total)
+
+            # Ports exclusively associated with attack tools / common RATs / reverse shells
+            # (deliberately excludes ambiguous ports like 6379/Redis, 27017/MongoDB)
+            _C2_PORTS = {4444,5554,6666,7777,8888,1337,31337,12345,54321,9999}
+
+            # NULL scan: tcp + flags == 0
+            _null_mask   = (_proto == "tcp") & (_flags == 0)
+            # XMAS scan: tcp + FIN+PSH+URG set (0x29)
+            _xmas_mask   = (_proto == "tcp") & (_flags & 0x29 == 0x29)
+            # SYN+FIN (invalid combination — stealth scan indicator)
+            _synfin_mask = (_proto == "tcp") & ((_flags & 0x03) == 0x03)
+            # C2 port hit (source or destination)
+            _c2_mask     = _dport.isin(_C2_PORTS) | _sport.isin(_C2_PORTS)
+
+            for i in np.where(_null_mask.values)[0]:
+                if sig_results[i] is None:
+                    sig_results[i] = ("NMAP Null Scan: TCP stealth scan (all flags clear)", 0.91)
+            for i in np.where(_xmas_mask.values)[0]:
+                if sig_results[i] is None:
+                    sig_results[i] = ("NMAP XMAS Scan: TCP stealth scan (FIN+PSH+URG)", 0.91)
+            for i in np.where(_synfin_mask.values)[0]:
+                if sig_results[i] is None:
+                    sig_results[i] = ("Malformed Packet: SYN+FIN stealth probe", 0.88)
+            for i in np.where(_c2_mask.values)[0]:
+                if sig_results[i] is None:
+                    dp = int(_dport.iloc[i]); sp = int(_sport.iloc[i])
+                    port_val = dp if dp in _C2_PORTS else sp
+                    sig_results[i] = (f"Suspicious C2 Traffic: Port {port_val}", 0.82)
+        except Exception:
+            pass
+
         # ── STEP 3: ALL predictions fully vectorised ──────────────────
         # Each layer stores results as a parallel array indexed by row.
         # Failures of individual models are caught per-model so one bad
@@ -3194,7 +3265,7 @@ def _run_analysis_pipeline(filename: str):
                     for i in range(total):
                         lbl  = engine._decode(int(dl_idx_batch[i]))
                         conf = float(dl_conf_batch[i])
-                        if lbl.upper() not in SAFE_VERDICTS and conf >= 0.75:
+                        if lbl.upper() not in SAFE_VERDICTS and conf >= 0.85:
                             dl_results[i] = (lbl.upper(), conf)
                 except Exception:
                     pass
@@ -3249,7 +3320,9 @@ def _run_analysis_pipeline(filename: str):
         # for actual hits (typically 1–50% of the dataset, never 100%).
         hit_index: dict = {}   # row_idx -> (verdict, conf, source)
         for i in range(total):
-            if ml_results[i] is not None:
+            if sig_results[i] is not None:
+                hit_index[i] = (*sig_results[i], "SIGNATURE_DB")
+            elif ml_results[i] is not None:
                 hit_index[i] = (*ml_results[i], "ML_ENSEMBLE")
             elif dl_results[i] is not None:
                 hit_index[i] = (*dl_results[i], "DL_LAYER")
@@ -3566,6 +3639,35 @@ async def clear_archive(x_authority: str = Header(None)):
     return {"status": "ARCHIVE_CLEARED"}
 
 
+@app.get("/api/v1/alerts/archive")
+async def get_archive(
+    limit: int = 200,
+    offset: int = 0,
+    x_authority: str = Header(None)
+):
+    """Return paginated archived alerts, newest first."""
+    if not _check_auth(x_authority):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    archive_path = CONFIG["ARCHIVE_FILE"]
+    if not os.path.exists(archive_path):
+        return {"alerts": [], "total": 0}
+
+    def _read():
+        try:
+            with open(archive_path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return {"alerts": [], "total": 0}
+            data_sorted = list(reversed(data))
+            page = data_sorted[offset: offset + limit]
+            return {"alerts": page, "total": len(data)}
+        except Exception:
+            return {"alerts": [], "total": 0}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _read)
+
+
 @app.get("/api/v1/alerts/archive/stats")
 async def archive_stats(x_authority: str = Header(None)):
     """Return archive summary without loading all data — O(1) scan."""
@@ -3640,6 +3742,8 @@ async def quarantine_host(request: Request, x_authority: str = Header(None)):
         _save_settings(settings)
     except Exception:
         pass
+    # Apply actual Windows Firewall block (same mechanism as Auto-Isolate)
+    threading.Thread(target=_apply_auto_isolate, args=(ip,), daemon=True).start()
     # Log as an alert entry
     _save_alert({
         "id": int(time.time()),
@@ -3652,7 +3756,7 @@ async def quarantine_host(request: Request, x_authority: str = Header(None)):
         "reason": reason,
         "session": None,
     })
-    return {"status": "QUARANTINED", "ip": ip, "at": ts}
+    return {"status": "QUARANTINED", "ip": ip, "at": ts, "firewall_rule": f"BASTION-AUTO-ISOLATE-{ip.replace('.','_')}"}
 
 @app.patch("/api/v1/alerts/{alert_id}/commit")
 async def commit_alert(alert_id: str, request: Request,
@@ -3789,6 +3893,15 @@ async def update_config(request: Request):
         current.update(data)
         _save_settings(current)
 
+        # ── Live detection threshold sync ───────────────────────────────────
+        global _alert_threshold, _ml_threshold, _anomaly_gate, _dpi_target
+        if any(k in data for k in ("sigWeight", "mlThreshold", "anomalyWeight")):
+            _alert_threshold = max(0.50, min(0.95, current.get("sigWeight", 70) / 100.0))
+            _ml_threshold    = max(0.40, min(0.95, current.get("mlThreshold", 60) / 100.0))
+            _anomaly_gate    = max(0.70, min(0.99, 1.0 - current.get("anomalyWeight", 50) * 0.003))
+        if "dpi_target" in data or "dpi_enabled" in data:
+            _dpi_target = current.get("dpi_target", "") if current.get("dpi_enabled") else ""
+
         # ── Real-time policy enforcement ────────────────────────────────────
         # If the update contains a 'policy' key/value pair from the admin UI,
         # apply the policy effect immediately (not just store it).
@@ -3838,8 +3951,15 @@ async def release_isolated_ip(request: Request):
 
 @app.post("/api/v1/neural/reset")
 async def neural_reset():
-    return {"status":"ACKNOWLEDGED",
-            "message":"Model reset acknowledged. Restart engine to reload models."}
+    global engine
+    try:
+        if engine is not None:
+            engine._predict_cache = {}
+            if hasattr(engine, '_flow_cache'):
+                engine._flow_cache.clear()
+        return {"status": "FLUSHED", "message": "Inference cache cleared. Models remain loaded — next prediction starts from a clean state."}
+    except Exception as ex:
+        return {"status": "PARTIAL", "message": f"Cache clear attempted: {ex}"}
 
 @app.post("/api/v1/roll-key")
 async def roll_key():
@@ -3863,7 +3983,23 @@ async def flush_logs():
 
 @app.post("/api/v1/maint")
 async def maintenance_mode():
-    return {"status":"MAINT_MODE","message":"Maintenance acknowledged."}
+    try:
+        with _alerts_lock:
+            with open(CONFIG["ALERTS_FILE"], "r") as f:
+                alerts = json.load(f)
+            seen = set()
+            deduped = []
+            for a in alerts:
+                key = a.get("id") or a.get("timestamp","")
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(a)
+            removed = len(alerts) - len(deduped)
+            with open(CONFIG["ALERTS_FILE"], "w") as f:
+                json.dump(deduped, f)
+        return {"status": "COMPLETE", "message": f"Alert log compacted — {removed} duplicate entries removed, {len(deduped)} records retained."}
+    except Exception as ex:
+        return {"status": "ERROR", "message": "Maintenance could not complete. Alert log may be empty or unreadable."}
 
 @app.post("/api/v1/wipe")
 async def wipe_system():
