@@ -97,6 +97,27 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
   });
   const [isolatedIPs, setIsolatedIPs] = useState([]);
 
+  // ── Analyst feedback log (committed verdicts from Attack Analysis) ────────
+  const [fbLog,   setFbLog]   = useState([]);
+  const [fbStats, setFbStats] = useState(null);
+
+  const fetchFeedback = useCallback(async () => {
+    try {
+      const [logRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/feedback`, { headers: HDR }),
+        fetch(`${API_BASE}/feedback/stats`, { headers: HDR }),
+      ]);
+      if (logRes.ok)   setFbLog(await logRes.json());
+      if (statsRes.ok) setFbStats(await statsRes.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchFeedback();
+    const t = setInterval(fetchFeedback, 15000);
+    return () => clearInterval(t);
+  }, [fetchFeedback]);
+
   // ── Sync with parent health poll ────────────────────────────
   // App.jsx polls /health every 4 s and passes the raw response as liveHealth.
   // Mirror it so engine status rows stay green between this component's own polls.
@@ -644,6 +665,75 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
                 cls="border-red-900/30 text-red-700 hover:text-red-400 hover:border-red-500/50"
               />
             </div>
+          </div>
+
+          {/* ANALYST FEEDBACK LOG — committed verdicts from Attack Analysis */}
+          <div className="bg-[#0d1117] border border-slate-800 p-5 rounded-2xl">
+            <h3 className="text-[10px] font-black text-slate-400 uppercase mb-1 flex items-center gap-2">
+              <UserCheck size={13} className="text-emerald-500" /> Analyst Feedback Log
+              {fbLog.length > 0 && (
+                <span className="ml-auto px-2 py-0.5 bg-emerald-600/20 text-emerald-400 rounded text-[9px] font-black border border-emerald-600/30">
+                  {fbLog.length} VERDICTS
+                </span>
+              )}
+            </h3>
+            <p className="text-[9px] text-slate-600 leading-relaxed mb-3">
+              Every verdict committed from Attack Analysis lands here. Confirmed accuracy
+              is the share of alerts analysts marked as genuine.
+            </p>
+            {fbStats && fbStats.total_feedback > 0 && (
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="bg-black/30 border border-slate-800 rounded-lg p-2 text-center">
+                  <p className="text-sm font-black text-white font-mono">{fbStats.total_feedback}</p>
+                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">Total</p>
+                </div>
+                <div className="bg-black/30 border border-emerald-900/40 rounded-lg p-2 text-center">
+                  <p className="text-sm font-black text-emerald-400 font-mono">
+                    {Math.round((fbStats.analyst_precision_signal ?? 0) * 100)}%
+                  </p>
+                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">Accuracy</p>
+                </div>
+                <div className="bg-black/30 border border-amber-900/40 rounded-lg p-2 text-center">
+                  <p className="text-sm font-black text-amber-400 font-mono">{fbStats.false_alarms}</p>
+                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">False Pos</p>
+                </div>
+              </div>
+            )}
+            {fbLog.length === 0 ? (
+              <p className="text-[9px] text-slate-700 font-mono">
+                No verdicts committed yet. Open an alert in Attack Analysis, judge it under
+                Verification Protocol, and it will appear here.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+                {[...fbLog].reverse().slice(0, 50).map((r, i) => (
+                  <div key={i} className="bg-black/30 border border-slate-800/60 rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest border ${
+                        r.judgement === 'CORRECT'
+                          ? 'bg-emerald-600/15 text-emerald-400 border-emerald-700/40'
+                          : 'bg-amber-600/15 text-amber-400 border-amber-700/40'
+                      }`}>
+                        {r.judgement === 'CORRECT' ? 'CONFIRMED' : 'FALSE POS'}
+                      </span>
+                      <span className="text-[9px] font-mono text-slate-400 truncate flex-1">
+                        {String(r.verdict || 'UNKNOWN').slice(0, 46)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-[8px] font-mono text-slate-600">
+                      {r.source_engine && <span>{r.source_engine}</span>}
+                      {r.srcip && <span>{r.srcip}</span>}
+                      {r.timestamp && <span className="ml-auto">{String(r.timestamp).slice(0, 16).replace('T', ' ')}</span>}
+                    </div>
+                    {r.note && (
+                      <p className="text-[9px] text-slate-500 mt-1 leading-relaxed border-t border-slate-800/60 pt-1">
+                        {r.note}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </aside>
       </div>

@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   BarChart3, ShieldAlert, Fingerprint, Terminal, ShieldCheck,
   ChevronRight, Search, Filter, Zap, ShieldX, Binary,
@@ -364,54 +365,100 @@ export default function AttackAnalysis() {
   const [alerts, setAlerts]                   = useState([]);
   const [isLoading, setIsLoading]             = useState(true);
   const [reports, setReports]                 = useState([]);
-  const [realTotalCount, setRealTotalCount]   = useState(0);
   const [archiveStats, setArchiveStats]       = useState(null);
   const [archiveBusy, setArchiveBusy]         = useState(false);
   // null = closed; 'archive' | 'reports' = which action is pending confirmation
   const [confirmModal, setConfirmModal]       = useState(null);
+
+  // ── Session-scoped alert paging ────────────────────────────────────────────
+  // The table pages the FULL session from disk (server-side), so all alerts of
+  // the session are reachable — not just the last 500 in the memory ring.
+  const [page, setPage]                       = useState(1);
+  const [sessionStats, setSessionStats]       = useState(null); // whole-session tile stats
+  const [filteredTotal, setFilteredTotal]     = useState(0);    // rows matching search+severity
+  const [viewLogId, setViewLogId]             = useState('current'); // 'current' | saved log id
+  const [detLogs, setDetLogs]                 = useState([]);   // saved detection logs
+  const [detLogBusy, setDetLogBusy]           = useState(false);
+  const searchDebounceRef                     = useRef(null);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   const triggerNotify = useCallback((msg, type = 'info') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
 
+  // Debounce the search box so each keystroke doesn't hit the backend
+  useEffect(() => {
+    clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => setDebouncedSearch(searchTerm), 350);
+    return () => clearTimeout(searchDebounceRef.current);
+  }, [searchTerm]);
+
   const fetchAlerts = useCallback(async () => {
     try {
-      // All requests are fast-path in-memory reads — no disk I/O.
-      // alerts?limit=500  → ring (500 entries, O(1), no disk)
-      // sweep/stats       → in-memory counters only (fixed — was reading 104MB)
-      // alerts/count      → O(1) counter, returns accurate total
-      const [ringRes, statsRes, countRes] = await Promise.all([
-        fetch(`${API_URL}/alerts?limit=500`,    { headers: HDR }).catch(() => null),
-        fetch(`${API_URL}/sweep/stats`,          { headers: HDR }).catch(() => null),
-        fetch(`${API_URL}/alerts/count`,         { headers: HDR }).catch(() => null),
-      ]);
-
-      const [ringData, statsData, countData] = await Promise.all([
-        ringRes?.ok   ? ringRes.json()   : Promise.resolve([]),
-        statsRes?.ok  ? statsRes.json()  : Promise.resolve(null),
-        countRes?.ok  ? countRes.json()  : Promise.resolve(null),
-      ]);
-
-      const ring = Array.isArray(ringData) ? ringData : [];
-
-      // Total count: prefer the O(1) counter, fall back to stats, then ring length
-      const total = countData?.total || statsData?.total_threats || ring.length;
-      if (total > 0) setRealTotalCount(total);
-
-      // Filter ring to real threats only (exclude system/operator events)
-      const realThreats = ring.filter(r => {
-        const v = (r.verdict || r.attack_type || '').toUpperCase();
-        return v && !ADMIN_VERDICTS.has(v);
+      const params = new URLSearchParams({
+        limit:    '20',
+        offset:   String((page - 1) * 20),
+        severity: filterSeverity,
+        q:        debouncedSearch,
+        log_id:   viewLogId,
       });
-      // Sort newest first
-      realThreats.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-      setAlerts(realThreats.map((r, i) => normalizeAlert(r, i)));
-
-      if (total === 0) setRealTotalCount(realThreats.length);
+      const res = await fetch(`${API_URL}/session/alerts?${params}`, { headers: HDR });
+      if (!res.ok) { setIsLoading(false); return; }
+      const d = await res.json();
+      setAlerts((d.alerts || []).map((r, i) => normalizeAlert(r, i)));
+      setFilteredTotal(d.filtered ?? 0);
+      setSessionStats(d.stats ?? null);
       setIsLoading(false);
     } catch { setIsLoading(false); }
+  }, [page, filterSeverity, debouncedSearch, viewLogId]);
+
+  // Jump back to page 1 whenever the filter context changes
+  useEffect(() => { setPage(1); }, [filterSeverity, debouncedSearch, viewLogId]);
+
+  // ── Saved detection logs ───────────────────────────────────────────────────
+  const fetchDetLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/detlogs`, { headers: HDR });
+      if (res.ok) {
+        const d = await res.json();
+        setDetLogs(d.logs || []);
+      }
+    } catch {}
   }, []);
+
+  const handleSaveDetLog = useCallback(async () => {
+    setDetLogBusy(true);
+    try {
+      const res = await fetch(`${API_URL}/detlogs/save`, {
+        method: 'POST', headers: { ...HDR, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const d = await res.json();
+      if (res.ok && d.status === 'SAVED') {
+        triggerNotify(d.message, 'success');
+        fetchDetLogs();
+      } else {
+        triggerNotify(d.message || 'Detection log could not be saved.', 'alert');
+      }
+    } catch { triggerNotify('Detection log could not be saved — engine unreachable.', 'alert'); }
+    setDetLogBusy(false);
+  }, [triggerNotify, fetchDetLogs]);
+
+  const handleDeleteDetLog = useCallback(async (logId) => {
+    try {
+      const res = await fetch(`${API_URL}/detlogs/${encodeURIComponent(logId)}`, {
+        method: 'DELETE', headers: HDR,
+      });
+      if (res.ok) {
+        triggerNotify('Detection log deleted.', 'success');
+        if (viewLogId === logId) setViewLogId('current');
+        fetchDetLogs();
+      } else {
+        triggerNotify('Detection log could not be deleted.', 'alert');
+      }
+    } catch { triggerNotify('Delete failed — engine unreachable.', 'alert'); }
+  }, [triggerNotify, fetchDetLogs, viewLogId]);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -470,30 +517,25 @@ export default function AttackAnalysis() {
     setArchiveBusy(false);
   }, [triggerNotify]);
 
-  useEffect(() => { fetchAlerts(); fetchReports(); fetchArchiveStats(); }, [fetchAlerts, fetchReports, fetchArchiveStats]);
+  useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
+  useEffect(() => { fetchReports(); fetchArchiveStats(); fetchDetLogs(); },
+    [fetchReports, fetchArchiveStats, fetchDetLogs]);
+
+  // Live sync only applies to the current session — saved logs are static
+  const prevTotalRef = useRef(0);
+  useEffect(() => {
+    if (!isLiveSync || viewLogId !== 'current') return;
+    const interval = setInterval(() => fetchAlerts(), 8000);
+    return () => clearInterval(interval);
+  }, [isLiveSync, viewLogId, fetchAlerts]);
 
   useEffect(() => {
-    if (!isLiveSync) return;
-    const interval = setInterval(async () => {
-      const prev = alerts.length;
-      await fetchAlerts();
-      setAlerts(cur => {
-        if (cur.length > prev) triggerNotify("New Threat Vector Detected", 'alert');
-        return cur;
-      });
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [isLiveSync, fetchAlerts, alerts.length, triggerNotify]);
-
-  const filteredAlerts = useMemo(() => alerts.filter(alert => {
-    const matchSearch = !searchTerm ||
-      alert.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      alert.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      alert.source.includes(searchTerm) ||
-      (alert.mitre?.id || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchSev = filterSeverity === "ALL" || alert.severity === filterSeverity;
-    return matchSearch && matchSev;
-  }), [alerts, searchTerm, filterSeverity]);
+    const total = sessionStats?.total ?? 0;
+    if (viewLogId === 'current' && prevTotalRef.current > 0 && total > prevTotalRef.current) {
+      triggerNotify("New Threat Vector Detected", 'alert');
+    }
+    prevTotalRef.current = total;
+  }, [sessionStats, viewLogId, triggerNotify]);
 
   const selectedAlert = useMemo(() => alerts.find(a => a.id === selectedAlertId), [alerts, selectedAlertId]);
 
@@ -539,8 +581,11 @@ export default function AttackAnalysis() {
         />
       ) : (
         <DetectionLog
-          alerts={filteredAlerts}
-          totalCount={realTotalCount || alerts.length}
+          alerts={alerts}
+          sessionStats={sessionStats}
+          filteredTotal={filteredTotal}
+          page={page}
+          setPage={setPage}
           isLoading={isLoading}
           onSelectAlert={setSelectedAlertId}
           notify={triggerNotify}
@@ -558,6 +603,12 @@ export default function AttackAnalysis() {
           archiveBusy={archiveBusy}
           onSaveToArchive={handleSaveToArchive}
           onClearArchive={handleClearArchive}
+          detLogs={detLogs}
+          viewLogId={viewLogId}
+          setViewLogId={setViewLogId}
+          onSaveDetLog={handleSaveDetLog}
+          onDeleteDetLog={handleDeleteDetLog}
+          detLogBusy={detLogBusy}
         />
       )}
 
@@ -580,15 +631,15 @@ export default function AttackAnalysis() {
 const PAGE_SIZE = 20;
 
 function DetectionLog({
-  alerts, totalCount, isLoading, onSelectAlert, notify,
+  alerts, sessionStats, filteredTotal, page, setPage, isLoading, onSelectAlert, notify,
   setSearchTerm, searchTerm, filterSeverity, setFilterSeverity,
   isLiveSync, setIsLiveSync, onRefresh, reports, onReportsRefresh, allAlerts,
   archiveStats, archiveBusy, onSaveToArchive, onClearArchive,
+  detLogs, viewLogId, setViewLogId, onSaveDetLog, onDeleteDetLog, detLogBusy,
 }) {
   const [time, setTime]               = useState(new Date().toLocaleTimeString());
   const [showReports, setShowReports] = useState(false);
   const [generating, setGenerating]   = useState(false);
-  const [page, setPage]               = useState(1);
   const [syncPulsing, setSyncPulsing] = useState(false);
   const [showArchiveView, setShowArchiveView] = useState(false);
   const [archivedAlerts, setArchivedAlerts]   = useState([]);
@@ -729,15 +780,16 @@ function DetectionLog({
     setGenerating(false);
   };
 
-  const highCount  = alerts.filter(a => a.severity === 'HIGH').length;
-  const avgConf    = alerts.length > 0 ? (alerts.reduce((s, a) => s + a.conf, 0) / alerts.length).toFixed(1) : '0.0';
-  const sigCount   = alerts.filter(a => a.method.includes('SIGNATURE')).length;
-  const mitreCount = new Set(alerts.map(a => a.mitre?.id).filter(Boolean)).size;
+  // Tile stats cover the WHOLE session (server-computed), not just this page
+  const highCount  = sessionStats?.high ?? 0;
+  const avgConf    = sessionStats?.avg_confidence != null ? sessionStats.avg_confidence.toFixed(1) : '0.0';
+  const totalCount = sessionStats?.total ?? 0;
+  const mitreCount = sessionStats?.mitre_unique ?? 0;
 
-  // Pagination
-  const totalPages  = Math.max(1, Math.ceil(alerts.length / PAGE_SIZE));
+  // Server-side pagination — alerts prop already holds exactly one page
+  const totalPages  = Math.max(1, Math.ceil((filteredTotal || 0) / PAGE_SIZE));
   const safePage    = Math.min(page, totalPages);
-  const pagedAlerts = alerts.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pagedAlerts = alerts;
 
   return (
     <div className="p-4 animate-in fade-in duration-1000 max-w-[1800px] mx-auto">
@@ -790,6 +842,46 @@ function DetectionLog({
             className="bg-slate-900 border border-slate-800 px-6 rounded-2xl text-slate-500 hover:text-cyan-400 hover:border-cyan-500/30 transition-all shadow-xl group flex items-center gap-3">
             <Download size={20} className="group-active:scale-90 transition-transform" />
             <span className="text-[10px] font-black uppercase tracking-widest hidden lg:block">Export CSV</span>
+          </button>
+
+          {/* Session picker — current live session or a saved detection log */}
+          <div className="flex items-center gap-2 bg-slate-900/60 border border-slate-800 rounded-2xl px-4">
+            <Clock size={16} className="text-slate-600 shrink-0" />
+            <select
+              value={viewLogId}
+              onChange={e => setViewLogId(e.target.value)}
+              className="bg-transparent text-[10px] font-black uppercase tracking-widest text-slate-300 outline-none py-4 cursor-pointer max-w-[220px]"
+              title="View the live session or a saved detection log"
+            >
+              <option value="current" className="bg-slate-900">Current Session (Live)</option>
+              {detLogs.map(l => (
+                <option key={l.id} value={l.id} className="bg-slate-900">
+                  {l.label} · {l.count.toLocaleString()}
+                </option>
+              ))}
+            </select>
+            {viewLogId !== 'current' && (
+              <button
+                onClick={() => onDeleteDetLog(viewLogId)}
+                title="Permanently delete this saved detection log"
+                className="text-slate-600 hover:text-red-400 transition-colors shrink-0"
+              >
+                <XCircle size={15} />
+              </button>
+            )}
+          </div>
+
+          {/* Save Detection Log — persists this session's threats until deleted */}
+          <button
+            onClick={onSaveDetLog}
+            disabled={detLogBusy || viewLogId !== 'current' || (sessionStats?.total ?? 0) === 0}
+            title="Store this session's full detection log permanently on this device"
+            className="bg-slate-900 border border-slate-800 px-5 py-4 rounded-2xl text-slate-500 hover:text-cyan-400 hover:border-cyan-500/30 transition-all shadow-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <FileBadge size={18} className={detLogBusy ? 'animate-pulse text-cyan-400' : ''} />
+            <span className="text-[10px] font-black uppercase tracking-widest hidden lg:block">
+              Save Detection Log
+            </span>
           </button>
 
           {/* Archive controls */}
@@ -851,9 +943,11 @@ function DetectionLog({
         </div>
       )}
 
-      {/* ARCHIVE VIEWER MODAL */}
-      {showArchiveView && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setShowArchiveView(false)}>
+      {/* ARCHIVE VIEWER MODAL — portalled to <body> so it always overlays the
+          full app window (a transformed ancestor would otherwise trap the
+          fixed overlay inside the content column, hiding part of it). */}
+      {showArchiveView && createPortal(
+        <div className="fixed inset-0 z-[400] bg-black/80 flex items-center justify-center p-4" onClick={() => setShowArchiveView(false)}>
           <div className="bg-[#0d1117] border border-emerald-500/30 rounded-2xl w-full max-w-5xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
               <div className="flex items-center gap-3">
@@ -912,7 +1006,8 @@ function DetectionLog({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* REPORT PANEL (collapsible) */}
@@ -960,7 +1055,7 @@ function DetectionLog({
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-800/50">
           <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
-            Showing {((safePage - 1) * PAGE_SIZE) + 1}–{Math.min(safePage * PAGE_SIZE, alerts.length)} of {alerts.length} threats
+            Showing {filteredTotal === 0 ? 0 : ((safePage - 1) * PAGE_SIZE) + 1}–{Math.min(safePage * PAGE_SIZE, filteredTotal)} of {filteredTotal.toLocaleString()} threats
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -1258,9 +1353,19 @@ function DeepDiveReport({ alert, onBack, notify, onReportsRefresh }) {
   const [exportedFiles, setExportedFiles] = useState([]);
   const [mitreExpanded, setMitreExpanded] = useState(true);
   const [iocExpanded, setIocExpanded]     = useState(true);
+  const [fbStats, setFbStats]             = useState(null);   // analyst feedback statistics
 
   const mitre = alert.mitre;
   const raw   = alert._full;
+
+  // ── Analyst feedback stats (system accuracy from committed verdicts) ──────
+  const fetchFbStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/feedback/stats`, { headers: HDR });
+      if (res.ok) setFbStats(await res.json());
+    } catch {}
+  }, []);
+  useEffect(() => { fetchFbStats(); }, [fetchFbStats]);
 
   // ── Commit Analysis ──────────────────────────────────────
   const handleCommit = async () => {
@@ -1278,9 +1383,10 @@ function DeepDiveReport({ alert, onBack, notify, onReportsRefresh }) {
         }),
       });
       if (res.ok) {
-        notify("Analysis committed — forensic record persisted to database", 'success');
+        notify("Verdict committed — recorded on this alert and in the Analyst Feedback Log (Command & Control)", 'success');
+        fetchFbStats();
         onReportsRefresh?.();
-        setTimeout(onBack, 1200);
+        setTimeout(onBack, 1500);
       } else {
         const err = await res.json().catch(() => ({}));
         notify(`Commit failed: ${err.detail || `HTTP ${res.status}`}`, 'alert');
@@ -1697,7 +1803,32 @@ function DeepDiveReport({ alert, onBack, notify, onReportsRefresh }) {
 
           {/* ANALYST VERIFICATION + NOTES */}
           <div className="bg-slate-900/40 border border-slate-800 rounded-[2.5rem] p-8 shadow-2xl backdrop-blur-xl">
-            <h3 className="text-slate-500 font-black text-[10px] uppercase tracking-[0.4em] mb-6">Verification Protocol</h3>
+            <h3 className="text-slate-500 font-black text-[10px] uppercase tracking-[0.4em] mb-2">Verification Protocol</h3>
+            <p className="text-[10px] text-slate-600 leading-relaxed mb-5">
+              Judge this detection: Confirm Threat if the alert is genuine, False Positive if the
+              engine got it wrong. Your verdict and notes are stored permanently with this alert
+              and feed the system accuracy statistics below. All committed verdicts are browsable
+              in the Analyst Feedback Log under Command &amp; Control.
+            </p>
+
+            {fbStats && fbStats.total_feedback > 0 && (
+              <div className="grid grid-cols-3 gap-3 mb-6">
+                <div className="bg-black/30 border border-slate-800 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black text-white font-mono">{fbStats.total_feedback}</p>
+                  <p className="text-[8px] text-slate-500 font-black uppercase tracking-widest mt-1">Verdicts Given</p>
+                </div>
+                <div className="bg-black/30 border border-emerald-800/40 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black text-emerald-400 font-mono">
+                    {Math.round((fbStats.analyst_precision_signal ?? 0) * 100)}%
+                  </p>
+                  <p className="text-[8px] text-slate-500 font-black uppercase tracking-widest mt-1">Confirmed Accuracy</p>
+                </div>
+                <div className="bg-black/30 border border-amber-800/40 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black text-amber-400 font-mono">{fbStats.false_alarms}</p>
+                  <p className="text-[8px] text-slate-500 font-black uppercase tracking-widest mt-1">False Positives</p>
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-3 mb-6">
               <VerificationBtn active={verification === 'confirm'} onClick={() => setVerification('confirm')}

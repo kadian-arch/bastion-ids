@@ -53,6 +53,7 @@ export default function MissionControl({ status }) {
   const [recentAlerts,      setRecentAlerts]      = useState([]);
   const [globalStats,       setGlobalStats]       = useState({ analyzed: 0, threats: 0, blocked: 0, accuracy: '—' });
   const [layerStatus,       setLayerStatus]       = useState({});
+  const [engineDiag,        setEngineDiag]        = useState({ sigs: 0, threshold: null });
   const [sweepLayerCounts,  setSweepLayerCounts]  = useState({ session: {} });
   const [uptime,         setUptime]         = useState(0);        // seconds
   const [startTs]        = useState(Date.now());
@@ -100,6 +101,10 @@ export default function MissionControl({ status }) {
           ml_cat:    d.ml_cat   ?? false,
           dl:        d.dl       ?? false,
           anomaly:   d.anomaly  ?? false,
+        });
+        setEngineDiag({
+          sigs:      d.signatures_active ?? 0,
+          threshold: typeof d.detection_threshold === 'number' ? d.detection_threshold : null,
         });
       } catch {}
 
@@ -496,9 +501,9 @@ export default function MissionControl({ status }) {
           </div>
           <div className="p-4 space-y-3">
             {[
-              { label: 'Signature Database',  val: '48,000+ active rules',                    icon: <Database size={13}/>,   col: 'text-cyan-400'   },
+              { label: 'Signature Database',  val: engineDiag.sigs > 0 ? `${engineDiag.sigs.toLocaleString()} active rules` : 'Loading…', icon: <Database size={13}/>, col: 'text-cyan-400' },
               { label: 'Detection Layers',    val: layers.filter(l => l.on).length + ' / 4 layers active', icon: <Brain size={13}/>, col: 'text-violet-400' },
-              { label: 'Detection Threshold', val: '50% confidence floor',                    icon: <TrendingUp size={13}/>, col: 'text-emerald-400' },
+              { label: 'Alert Confidence Floor', val: engineDiag.threshold != null ? `${Math.round(engineDiag.threshold * 100)}% minimum to alert` : '—', icon: <TrendingUp size={13}/>, col: 'text-emerald-400' },
               { label: 'Live Capture',        val: status?.is_capturing ? 'Active' : 'Standby', icon: <Radio size={13}/>,   col: 'text-sky-400'    },
               { label: 'System Mode',         val: status?.mode || 'OPERATIONAL',              icon: <Lock size={13}/>,       col: 'text-amber-400'  },
               { label: 'Network Nodes',       val: topologyNodes.length > 0 ? `${topologyNodes.length} endpoints mapped` : 'Pending discovery', icon: <Network size={13}/>, col: 'text-indigo-400' },

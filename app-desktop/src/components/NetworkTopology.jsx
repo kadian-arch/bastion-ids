@@ -175,10 +175,21 @@ export default function NetworkTopology({ status }) {
       addLog(`DPI active on ${node.ip} — layer-7 analysis enabled`, 'OK');
       setDpiStatus({ nodeId: node.id, status: 'active', ip: node.ip });
     } catch {
-      // Graceful fallback: still show DPI status locally
-      addLog(`DPI monitoring set for ${node.ip} (local mode)`, 'OK');
-      setDpiStatus({ nodeId: node.id, status: 'active', ip: node.ip });
+      addLog(`DPI could not be enabled — engine unreachable`, 'ERR');
+      setDpiStatus(null);
     }
+  };
+
+  // ── Stop DPI (clears the engine-side target too) ──────────
+  const handleStopDPI = async () => {
+    const ip = dpiStatus?.ip;
+    try {
+      await api.post('/settings/update', { dpi_target: '', dpi_enabled: false });
+      addLog(`DPI stopped${ip ? ` for ${ip}` : ''} — thresholds restored to normal`, 'OK');
+    } catch {
+      addLog(`DPI stop request failed — engine unreachable`, 'ERR');
+    }
+    setDpiStatus(null);
   };
 
   // ── Quarantine a node ─────────────────────────────────────
@@ -849,7 +860,18 @@ export default function NetworkTopology({ status }) {
               {dpiStatus?.nodeId === selectedNode.id && dpiStatus?.status === 'active' && (
                 <div className="p-3 bg-violet-900/20 border border-violet-500/30 rounded-xl">
                   <p className="text-[9px] font-black text-violet-400 uppercase tracking-widest mb-1">DPI Active</p>
-                  <p className="text-[10px] text-slate-400">Layer-7 analysis enabled for {dpiStatus.ip}</p>
+                  <p className="text-[10px] text-slate-400 mb-2">
+                    Full payload capture and a lowered alert threshold are applied to all
+                    traffic to and from {dpiStatus.ip}. Stops automatically on engine restart.
+                  </p>
+                  <button
+                    onClick={handleStopDPI}
+                    className="w-full bg-violet-900/30 hover:bg-violet-900/60 border border-violet-500/40
+                      py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all
+                      text-violet-300"
+                  >
+                    Stop DPI
+                  </button>
                 </div>
               )}
 

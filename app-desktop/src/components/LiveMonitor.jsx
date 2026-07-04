@@ -315,13 +315,9 @@ export default function LiveMonitor() {
   const [autoScroll,    setAutoScroll]   = useState(true);
   const [stats, setStats] = useState({ total: 0, threats: 0, pps: 0, bytes: 0 });
   const [captureError,  setCaptureError] = useState(null);   // sniffer error from backend
-  const [ifaceWarning,  setIfaceWarning] = useState(null);   // ARP-only / wrong interface warning
-  const [recIface,      setRecIface]     = useState(null);   // backend-recommended interface
   const [liveThreats,   setLiveThreats]  = useState([]);     // recent THREAT_DETECTED events (display only, capped at 20)
   const [sessionAlerts, setSessionAlerts] = useState(0);      // real session alert total (never capped)
   const [isolationToast, setIsolationToast] = useState(null); // auto-isolate notification
-  const [exportingCSV,  setExportingCSV]  = useState(false);  // CSV export in-flight
-  const [exportingPCAP, setExportingPCAP] = useState(false);  // PCAP export in-flight
 
   const wsRef          = useRef(null);
   const tableRef       = useRef(null);
@@ -497,24 +493,6 @@ export default function LiveMonitor() {
     wsRef.current = ws;
   }, [selIface]);   // eslint-disable-line
 
-  // ── Interface warning poll (every 8s while capturing) ───────────────────────
-  // Checks /capture/stats for backend's analysis of whether the current interface
-  // is only seeing ARP/broadcast traffic (wrong interface selected).
-  useEffect(() => {
-    if (captureState !== 'running') { setIfaceWarning(null); setRecIface(null); return; }
-    const poll = () => {
-      axios.get(`${API_BASE}/capture/stats`, { headers: AUTH_HDR, timeout: 5000 })
-        .then(({ data }) => {
-          setIfaceWarning(data.interface_warning || null);
-          setRecIface(data.recommended_interface || null);
-        })
-        .catch(() => {});
-    };
-    poll(); // immediate first check
-    const t = setInterval(poll, 8000);
-    return () => clearInterval(t);
-  }, [captureState]); // eslint-disable-line
-
   // ── Capture controls ─────────────────────────────────────────────────────────
   const handleStart = () => {
     setCaptureError(null);
@@ -563,55 +541,6 @@ export default function LiveMonitor() {
     const iface = (selIface || 'all').replace(/\s+/g, '_').slice(0, 20);
     return `BASTION-IDS_${date}_${time}_${iface}_${type}.${ext}`;
   }
-
-  // ── Export CSV ───────────────────────────────────────────────────────────────
-  const handleExportCSV = async () => {
-    if (exportingCSV) return;
-    setExportingCSV(true);
-    try {
-      const r = await axios.get(`${API_BASE}/capture/export-csv`, {
-        responseType: 'blob',
-        headers: AUTH_HDR,
-        timeout: 30000,
-      });
-      _download(r.data, _bastionFileName('capture', 'csv'));
-    } catch {
-      // Fallback: build from local packet state
-      if (packets.length) {
-        const cols = ['No.','Time','Source','src_port','Destination','dst_port',
-                      'Protocol','Length','Info','verdict','confidence','source_engine'];
-        const rows = packets.map(p =>
-          cols.map(c => `"${String(p[c] ?? '').replace(/"/g, '""')}"`).join(',')
-        );
-        _download(
-          new Blob([cols.join(',') + '\n' + rows.join('\n')], { type: 'text/csv' }),
-          _bastionFileName('capture', 'csv'),
-        );
-      }
-    } finally {
-      setExportingCSV(false);
-    }
-  };
-
-  const handleExportPCAP = async () => {
-    if (exportingPCAP) return;
-    setExportingPCAP(true);
-    try {
-      const r = await axios.get(`${API_BASE}/capture/export-pcap`, {
-        responseType: 'blob',
-        headers: AUTH_HDR,
-        timeout: 30000,
-      });
-      if (r.data.size === 0) throw new Error('Empty PCAP');
-      _download(r.data, _bastionFileName('capture', 'pcap'));
-    } catch (err) {
-      console.error('PCAP export:', err?.message || err);
-      setStats(s => ({ ...s, _pcapErr: true }));
-      setTimeout(() => setStats(s => ({ ...s, _pcapErr: false })), 4000);
-    } finally {
-      setExportingPCAP(false);
-    }
-  };
 
   // ── Save session to disk ──────────────────────────────────────────────────
   const handleSaveSession = useCallback(async () => {
@@ -802,7 +731,7 @@ export default function LiveMonitor() {
           </div>
         </div>
 
-        {/* Export + Save buttons */}
+        {/* Save Session — exports both CSV and PCAP in one action */}
         <div className="flex items-center gap-2 ml-auto flex-wrap">
           {/* PCAP error notification */}
           {stats._pcapErr && (
@@ -811,30 +740,6 @@ export default function LiveMonitor() {
               <AlertCircle size={10}/> PCAP unavailable — CSV saved
             </span>
           )}
-          <button
-            onClick={handleExportCSV}
-            disabled={!packets.length || exportingCSV}
-            className="flex items-center gap-1.5 px-3 py-2 rounded text-[10px] font-black uppercase tracking-wider
-              bg-slate-900 text-slate-400 border border-slate-800 hover:border-cyan-500/40 hover:text-cyan-400
-              transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Export captured packets as CSV"
-          >
-            {exportingCSV
-              ? <><RefreshCw size={12} className="animate-spin"/> Exporting…</>
-              : <><FileDown size={12} /> CSV</>}
-          </button>
-          <button
-            onClick={handleExportPCAP}
-            disabled={!packets.length || exportingPCAP}
-            className="flex items-center gap-1.5 px-3 py-2 rounded text-[10px] font-black uppercase tracking-wider
-              bg-slate-900 text-slate-400 border border-slate-800 hover:border-violet-500/40 hover:text-violet-400
-              transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Export raw PCAP capture file"
-          >
-            {exportingPCAP
-              ? <><RefreshCw size={12} className="animate-spin"/> Exporting…</>
-              : <><Download size={12} /> PCAP</>}
-          </button>
           <button
             onClick={handleSaveSession}
             disabled={!packets.length}
@@ -983,25 +888,6 @@ export default function LiveMonitor() {
             </span>
           )}
         </div>
-
-        {/* Interface warning banner — ARP-only / wrong adapter selected */}
-        {ifaceWarning && captureState === 'running' && (
-          <div className="mx-4 mb-2 flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 animate-in slide-in-from-top-2 duration-300">
-            <AlertCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-amber-300 text-[10px] font-black uppercase tracking-widest mb-1">Wrong Interface Detected</p>
-              <p className="text-amber-400/80 text-[10px] font-bold leading-relaxed">{ifaceWarning}</p>
-            </div>
-            {recIface && (
-              <button
-                onClick={() => { setSelIface(recIface); setIfaceWarning(null); }}
-                className="shrink-0 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black uppercase tracking-widest rounded-lg transition-all"
-              >
-                Switch Now
-              </button>
-            )}
-          </div>
-        )}
 
         {/* Scrollable packet rows */}
         <div ref={tableRef} className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar">

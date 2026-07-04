@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Settings, Save, Terminal, CpuIcon, Layers, ShieldAlert, Key,
-  Database, Zap, Loader2, RotateCcw, CheckCircle, XCircle,
-  AlertTriangle, RefreshCw, Trash2, Shield, Lock
+  Settings, Save, Terminal, CpuIcon, Layers, Key,
+  Database, Loader2, RotateCcw, CheckCircle, XCircle,
+  AlertTriangle, RefreshCw, Trash2
 } from 'lucide-react';
 
 const API = 'http://localhost:48217/api/v1';
@@ -92,7 +92,6 @@ export default function SystemSettings() {
   const [initialConfig,setInitialConfig]= useState({});
   const [hasChanges,   setHasChanges]   = useState(false);
   const [busy,         setBusy]         = useState({});
-  const [lockdownMode, setLockdownMode] = useState(false);
   const [confirm,      setConfirm]      = useState(null); // { key, word, action }
   const { toast, ok, err, warn } = useToast();
 
@@ -181,12 +180,6 @@ export default function SystemSettings() {
         <div className="flex items-center gap-3">
           <Settings className="text-cyan-500" size={20} />
           <h1 className="text-lg font-black text-white uppercase tracking-wider">System Configuration</h1>
-          {lockdownMode && (
-            <span className="ml-3 px-2 py-0.5 bg-red-900/50 border border-red-700 text-red-400
-              text-[9px] font-black uppercase tracking-widest rounded animate-pulse">
-              LOCKDOWN ACTIVE
-            </span>
-          )}
         </div>
         <div className="flex gap-3">
           <button
@@ -258,18 +251,18 @@ export default function SystemSettings() {
           <ConfigBlock icon={<Layers size={16}/>} title="Detection Sensitivity" color="text-indigo-500">
             <WeightSlider
               label="Signature Confidence Floor"
-              value={config.sigWeight ?? 70}
-              onChange={v => handleUpdate('sigWeight', v)}
+              value={config.sigConfFloor ?? 70}
+              onChange={v => handleUpdate('sigConfFloor', v)}
             />
             <WeightSlider
               label="ML Ensemble Vote Threshold"
-              value={config.mlThreshold ?? 60}
-              onChange={v => handleUpdate('mlThreshold', v)}
+              value={config.mlVoteThreshold ?? 60}
+              onChange={v => handleUpdate('mlVoteThreshold', v)}
             />
             <WeightSlider
               label="Anomaly Sensitivity"
-              value={config.anomalyWeight ?? 50}
-              onChange={v => handleUpdate('anomalyWeight', v)}
+              value={config.anomalySensitivity ?? 50}
+              onChange={v => handleUpdate('anomalySensitivity', v)}
             />
             <ActionButton
               label="Flush Inference Cache"
@@ -281,29 +274,8 @@ export default function SystemSettings() {
             />
           </ConfigBlock>
 
-          <ConfigBlock icon={<ShieldAlert size={16}/>} title="Mitigation Policies" color="text-amber-500">
-            <ToggleRow
-              label="Auto-Isolate Threats"
-              desc="Block flagged IPs via Windows Firewall on detection"
-              active={config.autoIsolate}
-              onClick={() => handleUpdate('autoIsolate', !config.autoIsolate)}
-            />
-            <ToggleRow
-              label="Ghost Protocol"
-              desc="Suppress ICMP responses — hide this host from ping scanners"
-              active={config.ghostProtocol}
-              onClick={() => handleUpdate('ghostProtocol', !config.ghostProtocol)}
-            />
-            <ToggleRow
-              label="Stealth Mode"
-              desc="Block mDNS (UDP 5353) — hide from network discovery tools"
-              active={config.stealthMode}
-              onClick={() => handleUpdate('stealthMode', !config.stealthMode)}
-            />
-            <p className="text-[9px] text-slate-600 mt-1">
-              Toggle changes are staged — hit Commit Changes to apply to the engine.
-            </p>
-          </ConfigBlock>
+          {/* Mitigation policies live in Command & Control — single source of
+              truth for operational toggles. Settings covers configuration only. */}
         </div>
 
         {/* ── COL 3: Keys + Storage + Urgent ──────────────────────────────── */}
@@ -334,8 +306,8 @@ export default function SystemSettings() {
             />
           </ConfigBlock>
 
-          <ConfigBlock icon={<Database size={16}/>} title="Storage Operations" color="text-slate-400">
-            <div className="grid grid-cols-2 gap-3 mb-3">
+          <ConfigBlock icon={<Database size={16}/>} title="Log Maintenance" color="text-slate-400">
+            <div className="grid grid-cols-2 gap-3">
               <ActionButton
                 label="Compact Logs"
                 icon={<Database size={13}/>}
@@ -344,61 +316,21 @@ export default function SystemSettings() {
                 color="default"
               />
               <ActionButton
-                label="Clear Alert Logs"
+                label="Clear Alert History"
                 icon={<Trash2 size={13}/>}
                 loading={busy['flush']}
                 onClick={() => runDestructive('flush', '/flush', 'post',
-                  'Alert log cleared — session history reset.')}
+                  'Alert history cleared — current session log reset.')}
                 color="amber"
               />
             </div>
-            <ActionButton
-              label="Wipe All Volatile Data"
-              icon={<XCircle size={13}/>}
-              loading={busy['wipe']}
-              onClick={() => runDestructive('wipe', '/wipe', 'post',
-                'All volatile data wiped. Persistent archive unaffected.')}
-              color="red"
-              full
-            />
-          </ConfigBlock>
-
-          {/* ── Urgent Directives ──────────────────────────────────────────── */}
-          <div className="bg-slate-950 border border-red-900/50 p-5 rounded">
-            <h4 className="flex items-center gap-2 text-xs font-bold text-red-400 uppercase tracking-widest mb-1">
-              <Zap size={15} /> Urgent Directives
-            </h4>
-            <p className="text-[9px] text-slate-600 mb-4">
-              Irreversible commands — word verification required.
+            <p className="text-[9px] text-slate-600 mt-3 leading-relaxed">
+              Compact Logs removes duplicate alert entries. Clear Alert History erases the
+              current session's alert log; saved detection logs and the permanent archive
+              are not affected. Operational commands (restart, lockdown, purge) live in
+              Command &amp; Control.
             </p>
-            <div className="grid grid-cols-2 gap-3">
-              <ActionButton
-                label="Restart Engine"
-                icon={<RefreshCw size={13}/>}
-                loading={busy['restart']}
-                onClick={() => runAction('restart', '/restart', 'post',
-                  'Restart signal sent. Close and reopen Bastion IDS to complete the restart.')}
-                color="default"
-              />
-              <ActionButton
-                label="Hard Lockdown"
-                icon={<Lock size={13}/>}
-                loading={busy['lockdown']}
-                onClick={() => runDestructive(
-                  'lockdown', '/lockdown', 'post',
-                  'LOCKDOWN ACTIVE — capture halted, buffers flushed.',
-                  { onSuccess: () => setLockdownMode(true) }
-                )}
-                color="lockdown"
-              />
-            </div>
-            {lockdownMode && (
-              <div className="mt-3 p-2 bg-red-950/30 border border-red-900/40 rounded text-[9px]
-                text-red-400 font-mono">
-                System is in lockdown. Restart the engine to resume normal operations.
-              </div>
-            )}
-          </div>
+          </ConfigBlock>
         </div>
       </div>
     </div>
@@ -451,31 +383,10 @@ function WeightSlider({ label, value, onChange, max = 100 }) {
   );
 }
 
-function ToggleRow({ label, desc, active, onClick }) {
-  return (
-    <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded mb-2.5">
-      <div>
-        <p className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">{label}</p>
-        {desc && <p className="text-[9px] text-slate-600 mt-0.5">{desc}</p>}
-      </div>
-      <button
-        onClick={onClick}
-        className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ml-3
-          ${active ? 'bg-cyan-500' : 'bg-slate-700'}`}
-      >
-        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all
-          ${active ? 'left-5' : 'left-1'}`} />
-      </button>
-    </div>
-  );
-}
-
 const BTN_STYLES = {
   default:  'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200',
   amber:    'bg-amber-900/30 hover:bg-amber-900/60 border-amber-800/50 text-amber-300',
-  red:      'bg-red-900/30 hover:bg-red-900/60 border-red-800/50 text-red-400',
   pink:     'bg-pink-900/30 hover:bg-pink-800/40 border-pink-800/50 text-pink-300',
-  lockdown: 'bg-red-600 hover:bg-red-500 border-red-500 text-white shadow-lg',
 };
 
 function ActionButton({ label, icon, onClick, loading, color = 'default', full = false }) {

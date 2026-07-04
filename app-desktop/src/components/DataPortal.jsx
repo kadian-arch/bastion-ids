@@ -164,7 +164,9 @@ export default function DataPortal({ lockdownActive }) {
           session_meta: {
             report_type:  'batch_analysis',
             source:       fileData?.filename ?? 'unknown',
-            total_alerts: detectedAttacks.length,
+            // sweepProgress.hits is the engine's true total — detectedAttacks
+            // is a capped fetch (5000) and would understate large sweeps.
+            total_alerts: sweepProgress?.hits ?? detectedAttacks.length,
           },
         }),
       });
@@ -289,7 +291,7 @@ export default function DataPortal({ lockdownActive }) {
             <h1 className="text-2xl font-black text-white uppercase tracking-tight">Telemetry Ingestion Portal</h1>
           </div>
           <p className="text-slate-500 text-xs font-semibold">
-            UNSW · CICIDS · PCAP · Generic CSV — Universal Feature Bridge Active · No Dataset Cap
+            Upload a capture or dataset and run a full analysis
           </p>
         </div>
         <div className="flex gap-8">
@@ -437,8 +439,7 @@ export default function DataPortal({ lockdownActive }) {
             ) : (
               <>
                 <UploadCloud size={48} className={`mb-4 ${dragOver ? 'text-cyan-500' : 'text-slate-700'}`} />
-                <p className="text-sm font-semibold text-slate-300 mb-2">Drag & drop or click to select</p>
-                <p className="text-xs text-slate-500 mb-4">Supports .PCAP · .CSV · .LOG — Any size</p>
+                <p className="text-sm font-semibold text-slate-300 mb-4">Drag & drop or click to select</p>
                 <span className="px-6 py-2 bg-slate-800 border border-slate-700 text-slate-200 hover:bg-cyan-600 hover:text-white transition-all rounded font-bold text-xs uppercase tracking-wider">
                   Browse Files
                 </span>
@@ -446,11 +447,6 @@ export default function DataPortal({ lockdownActive }) {
             )}
           </div>
           <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileInput} accept=".pcap,.pcapng,.csv,.log" />
-
-          {/* ── File type capability note ─────────────────────────────────── */}
-          <div className="mt-3 p-3 bg-slate-900 border border-slate-800 rounded text-[9px] text-slate-500 leading-relaxed font-mono">
-            <span className="text-cyan-500 font-black">PCAP / PCAPNG / CSV / LOG</span> — All 4 detection layers active: Signature Engine, ML Ensemble, DNN Specialist, Anomaly Sentinel.
-          </div>
         </div>
 
         {/* ── DATASET PREVIEW + SWEEP ─────────────────────── */}

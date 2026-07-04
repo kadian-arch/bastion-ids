@@ -1010,12 +1010,20 @@ def _load_policies_from_settings():
         for k in _active_policies:
             if k in s:
                 _active_policies[k] = bool(s[k])
-    # Clamp prevents dangerously low thresholds if sigWeight still holds the old
-    # "engine balance weight" value (default 25) from a pre-slider install.
-    _alert_threshold = max(0.50, min(0.95, s.get("sigWeight", 70) / 100.0))
-    _ml_threshold    = max(0.40, min(0.95, s.get("mlThreshold", 60) / 100.0))
-    _anomaly_gate    = max(0.70, min(0.99, 1.0 - s.get("anomalyWeight", 50) * 0.003))
-    _dpi_target      = s.get("dpi_target", "") if s.get("dpi_enabled") else ""
+    # Clamps keep the detection gates inside sane operating bounds no matter
+    # what ends up in settings.json.
+    _alert_threshold = max(0.50, min(0.95, s.get("sigConfFloor", 70) / 100.0))
+    _ml_threshold    = max(0.40, min(0.95, s.get("mlVoteThreshold", 60) / 100.0))
+    _anomaly_gate    = max(0.70, min(0.99, 1.0 - s.get("anomalySensitivity", 50) * 0.003))
+    # DPI never survives an engine restart. It's a live investigative tool
+    # aimed at whatever a host's IP is RIGHT NOW; a stale target from a
+    # previous session would silently skew thresholds for an unrelated IP.
+    _dpi_target = ""
+    if s.get("dpi_enabled") or s.get("dpi_target"):
+        s["dpi_enabled"] = False
+        s["dpi_target"]  = ""
+        try:    _save_settings(s)
+        except Exception: pass
 
 def _apply_auto_isolate(ip: str):
     """
@@ -1291,27 +1299,42 @@ def _load_alerts(max_entries: int = 100_000) -> list:
     except Exception:
         return []
 
+_SETTINGS_DEFAULTS = {
+    "systemName":"Bastion IDS","interface":"Auto","retentionDays":30,
+    "cpuLimit":80,"ramLimit":80,"cnnWeight":40,"lstmWeight":35,
+    "sigWeight":25,"autoIsolate":False,"geoFence":False,"geofence":False,
+    "mfaEnforce":False,"stealthMode":False,"deepInspection":True,
+    "ghostProtocol":False,"apiKey":CONFIG["AUTH_KEY"],
+    "logLevel":"INFO","alertThreshold":0.70,"anomalyThreshold":0.75,
+    # Detection sensitivity sliders. Deliberately NOT named sigWeight /
+    # mlThreshold — those keys carried a different meaning (engine balance
+    # weights) in older installs and stale values would poison thresholds.
+    "sigConfFloor":70,"mlVoteThreshold":60,"anomalySensitivity":50,
+}
+
+# Keys with no default that are still legitimate persisted state.
+_SETTINGS_EXTRA_KEYS = {
+    "dpi_target", "dpi_enabled", "quarantined_ips", "last_quarantine",
+    "system_mode",
+}
+
+# The only keys allowed to exist in settings.json. Anything else — stray
+# request fields ({policy, value, key}), retired toggles from old UI builds —
+# is dropped on both load and update so junk cannot accumulate.
+_SETTINGS_ALLOWED_KEYS = set(_SETTINGS_DEFAULTS) | _SETTINGS_EXTRA_KEYS
+
 def _load_settings() -> dict:
-    _defaults = {
-        "systemName":"Bastion IDS","interface":"Auto","retentionDays":30,
-        "cpuLimit":80,"ramLimit":80,"cnnWeight":40,"lstmWeight":35,
-        "sigWeight":25,"autoIsolate":False,"geoFence":False,
-        "mfaEnforce":False,"stealthMode":False,"deepInspection":True,
-        "ghostProtocol":False,"apiKey":CONFIG["AUTH_KEY"],
-        "logLevel":"INFO","alertThreshold":0.70,"anomalyThreshold":0.75,
-        "sigWeight":70,"mlThreshold":60,"anomalyWeight":50
-    }
     try:
         if os.path.exists(CONFIG["SETTINGS_FILE"]):
             with open(CONFIG["SETTINGS_FILE"]) as f:
                 on_disk = json.load(f)
             # Merge: defaults first, then on-disk values override.
             # This ensures newly-added default fields are always present.
-            merged = {**_defaults, **on_disk}
-            return merged
+            merged = {**_SETTINGS_DEFAULTS, **on_disk}
+            return {k: v for k, v in merged.items() if k in _SETTINGS_ALLOWED_KEYS}
     except Exception:
         pass
-    return _defaults
+    return dict(_SETTINGS_DEFAULTS)
 
 def _save_settings(data: dict):
     with open(CONFIG["SETTINGS_FILE"], "w") as f:
@@ -1400,6 +1423,9 @@ async def health_check():
         "signatures_active": ENGINE_STATUS.get("signatures_active", 0),
         "alerts_total":    alerts_total,
         "layers_active":   ENGINE_STATUS.get("layers_active", 0),
+        # Live alert-confidence gate — reflects the Signature Confidence Floor
+        # slider so the UI can show the real operating threshold.
+        "detection_threshold": _alert_threshold,
         # Nested model status (original shape)
         "model_status":    model_st,
         # Flattened model flags at root level — expected by frontend components
@@ -3115,25 +3141,71 @@ def _run_analysis_pipeline(filename: str):
             _sport = _sc.get("sport", _sc.get("src_port", pd.Series([0]*total)))
             _dport = _sc.get("dsport", _sc.get("dport", _sc.get("dst_port", pd.Series([0]*total))))
             _proto = _sc.get("proto", pd.Series(["tcp"]*total)).astype(str).str.lower()
-            _flags = _sc.get("tcp_flags_raw", _sc.get("tcp_flags", pd.Series([-1]*total)))
 
             try: _sport = pd.to_numeric(_sport, errors="coerce").fillna(0).astype(int)
             except: _sport = pd.Series([0]*total)
             try: _dport = pd.to_numeric(_dport, errors="coerce").fillna(0).astype(int)
             except: _dport = pd.Series([0]*total)
-            try: _flags = pd.to_numeric(_flags, errors="coerce").fillna(-1).astype(int)
-            except: _flags = pd.Series([-1]*total)
+
+            # ── TCP flag parsing ─────────────────────────────────────────────
+            # Rows without a parseable flag value get sentinel -1 and are
+            # EXCLUDED from all flag-based rules. A -1 sentinel is all-ones in
+            # two's complement, so `-1 & mask == mask` matches everything —
+            # feeding it into the masks below would flag every TCP row.
+            _FLAG_NAME_BITS   = {"FIN":0x01,"SYN":0x02,"RST":0x04,"PSH":0x08,
+                                 "ACK":0x10,"URG":0x20,"ECE":0x40,"CWR":0x80}
+            _FLAG_LETTER_BITS = {"F":0x01,"S":0x02,"R":0x04,"P":0x08,
+                                 "A":0x10,"U":0x20,"E":0x40,"C":0x80}
+
+            def _parse_flag_cell(v):
+                """Accept numeric (2), scapy letters (FA, PA), or names (FIN,PSH,URG)."""
+                try:
+                    f = float(v)
+                    if f == f:            # not NaN
+                        return int(f)
+                except (TypeError, ValueError):
+                    pass
+                s = str(v).strip().upper()
+                if not s or s in ("NAN", "NONE", "-"):
+                    return -1
+                if s.startswith("0X"):
+                    try:    return int(s, 16)
+                    except ValueError: return -1
+                bits = 0
+                if any(sep in s for sep in (",", "+", "|", " ")) or s in _FLAG_NAME_BITS:
+                    for tok in s.replace("+", ",").replace("|", ",").replace(" ", ",").split(","):
+                        bits |= _FLAG_NAME_BITS.get(tok.strip(), 0)
+                    return bits if bits else -1
+                for ch in s:
+                    b = _FLAG_LETTER_BITS.get(ch)
+                    if b is None:
+                        return -1         # unknown letter — treat as unparseable
+                    bits |= b
+                return bits if bits else -1
+
+            _flags_src = None
+            for _col in ("tcp_flags_raw", "tcp_flags", "flags", "tcp_flags_detail"):
+                if _col in _sc.columns:
+                    _flags_src = _sc[_col]
+                    break
+            if _flags_src is not None:
+                try:    _flags = _flags_src.apply(_parse_flag_cell).astype(int)
+                except Exception: _flags = pd.Series([-1]*total)
+            else:
+                _flags = pd.Series([-1]*total)
+            _flags_valid = _flags >= 0
 
             # Ports exclusively associated with attack tools / common RATs / reverse shells
             # (deliberately excludes ambiguous ports like 6379/Redis, 27017/MongoDB)
             _C2_PORTS = {4444,5554,6666,7777,8888,1337,31337,12345,54321,9999}
 
             # NULL scan: tcp + flags == 0
-            _null_mask   = (_proto == "tcp") & (_flags == 0)
-            # XMAS scan: tcp + FIN+PSH+URG set (0x29)
-            _xmas_mask   = (_proto == "tcp") & (_flags & 0x29 == 0x29)
+            _null_mask   = _flags_valid & (_proto == "tcp") & (_flags == 0)
+            # XMAS scan: tcp + EXACTLY FIN+PSH+URG (0x29). Exact match — a
+            # subset test would also hit rare-but-legit FIN+PSH+ACK+URG teardowns.
+            _xmas_mask   = _flags_valid & (_proto == "tcp") & (_flags == 0x29)
             # SYN+FIN (invalid combination — stealth scan indicator)
-            _synfin_mask = (_proto == "tcp") & ((_flags & 0x03) == 0x03)
+            _synfin_mask = _flags_valid & (_proto == "tcp") & ((_flags & 0x03) == 0x03)
             # C2 port hit (source or destination)
             _c2_mask     = _dport.isin(_C2_PORTS) | _sport.isin(_C2_PORTS)
 
@@ -3718,6 +3790,197 @@ async def get_alert_count():
         "session": session_threat_count,
     }
 
+# ─────────────────────────────────────────────────────────────
+# DETECTION LOG SESSION STORE
+#
+# alerts.json only holds the CURRENT app run (cleared on every start).
+# Analysts can snapshot the current run into a named detection log that
+# survives restarts. Saved logs live in data/detection_logs/ and are removed
+# only by uninstalling or by an explicit delete from the UI.
+# ─────────────────────────────────────────────────────────────
+_DETLOG_DIR   = os.path.join(os.path.dirname(CONFIG["ALERTS_FILE"]), "data", "detection_logs")
+_DETLOG_INDEX = os.path.join(_DETLOG_DIR, "index.json")
+_detlog_lock  = threading.Lock()
+
+# Verdicts that are operator/system events, not threats — mirrors the UI filter.
+_NON_THREAT_VERDICTS = {"NORMAL", "LOCKDOWN", "BASTION_CLEAN", "", "OPERATOR"}
+
+# mtime-keyed cache so paging through a big alert file re-reads it only when
+# the file actually changed, not on every page click.
+_alert_page_cache = {"path": None, "mtime": 0.0, "data": []}
+
+def _read_alerts_file_cached(path: str) -> list:
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return []
+    c = _alert_page_cache
+    if c["path"] == path and c["mtime"] == mt:
+        return c["data"]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            data = []
+    except Exception:
+        data = []
+    c["path"], c["mtime"], c["data"] = path, mt, data
+    return data
+
+def _detlog_read_index() -> list:
+    try:
+        with open(_DETLOG_INDEX, "r", encoding="utf-8") as f:
+            idx = json.load(f)
+        return idx if isinstance(idx, list) else []
+    except Exception:
+        return []
+
+def _detlog_write_index(idx: list):
+    os.makedirs(_DETLOG_DIR, exist_ok=True)
+    with open(_DETLOG_INDEX, "w", encoding="utf-8") as f:
+        json.dump(idx, f, indent=2)
+
+def _filter_page_alerts(alerts: list, severity: str, q: str,
+                        offset: int, limit: int) -> dict:
+    """One pass: threat filter + severity/search filter + stats + page slice."""
+    q_low = (q or "").lower()
+    sev   = (severity or "ALL").upper()
+    total = high = med = 0
+    conf_sum = 0.0
+    mitre_ids: set = set()
+    matched: list = []
+    for a in alerts:
+        v = str(a.get("verdict") or a.get("attack_type") or "").upper()
+        if v in _NON_THREAT_VERDICTS:
+            continue
+        total += 1
+        a_sev = str(a.get("severity", "")).upper() or ("HIGH" if float(a.get("confidence", 0) or 0) >= 0.85 else "MEDIUM")
+        if a_sev == "HIGH": high += 1
+        elif a_sev == "MEDIUM": med += 1
+        try:    conf_sum += float(a.get("confidence", 0) or 0)
+        except (TypeError, ValueError): pass
+        if a.get("mitre_id"): mitre_ids.add(a["mitre_id"])
+        # severity / search filters apply to the LIST, stats stay whole-session
+        if sev != "ALL" and a_sev != sev:
+            continue
+        if q_low:
+            hay = " ".join(str(a.get(k, "")) for k in
+                           ("verdict", "attack_type", "srcip", "dstip", "Source",
+                            "Destination", "mitre_id", "source_engine")).lower()
+            if q_low not in hay:
+                continue
+        matched.append(a)
+    # Newest first
+    matched.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
+    page = matched[offset:offset + limit]
+    avg_conf = (conf_sum / total) if total else 0.0
+    return {
+        "alerts":   page,
+        "filtered": len(matched),
+        "stats": {
+            "total":       total,
+            "high":        high,
+            "medium":      med,
+            "low":         max(0, total - high - med),
+            "avg_confidence": round(avg_conf * 100, 1) if avg_conf <= 1.0 else round(avg_conf, 1),
+            "mitre_unique": len(mitre_ids),
+        },
+    }
+
+@app.get("/api/v1/session/alerts")
+async def get_session_alerts(limit: int = 20, offset: int = 0,
+                             severity: str = "ALL", q: str = "",
+                             log_id: str = "current"):
+    """Paginated full-session alert feed with whole-session stats.
+
+    log_id: "current" pages the live alerts.json; any other value pages a
+    saved detection log from data/detection_logs/.
+    """
+    limit  = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    if log_id == "current":
+        _flush_alerts_now()   # include the freshest buffered alerts
+        path = CONFIG["ALERTS_FILE"]
+    else:
+        safe = os.path.basename(str(log_id))
+        path = os.path.join(_DETLOG_DIR, f"{safe}.json")
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail=f"Detection log {log_id} not found")
+
+    def _work():
+        alerts = _read_alerts_file_cached(path)
+        return _filter_page_alerts(alerts, severity, q, offset, limit)
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _work)
+    result["log_id"] = log_id
+    return result
+
+@app.post("/api/v1/detlogs/save")
+async def save_detection_log(request: Request):
+    """Snapshot the current session's threats into a permanent detection log."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    _flush_alerts_now()
+
+    def _work():
+        alerts = _read_alerts_file_cached(CONFIG["ALERTS_FILE"])
+        threats = [a for a in alerts
+                   if str(a.get("verdict") or a.get("attack_type") or "").upper()
+                   not in _NON_THREAT_VERDICTS]
+        if not threats:
+            return {"status": "NOTHING_TO_SAVE",
+                    "message": "No threats in the current session to save."}
+        log_id = f"detlog_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        label  = (body.get("label") or "").strip() or \
+                 f"Session {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        with _detlog_lock:
+            os.makedirs(_DETLOG_DIR, exist_ok=True)
+            with open(os.path.join(_DETLOG_DIR, f"{log_id}.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(threats, f, separators=(",", ":"))
+            idx = _detlog_read_index()
+            idx.append({
+                "id":       log_id,
+                "label":    label,
+                "saved_at": datetime.datetime.now().isoformat(),
+                "count":    len(threats),
+            })
+            _detlog_write_index(idx)
+        return {"status": "SAVED", "id": log_id, "label": label,
+                "count": len(threats),
+                "message": f"Detection log saved — {len(threats):,} threats stored permanently."}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _work)
+
+@app.get("/api/v1/detlogs")
+async def list_detection_logs():
+    """List saved detection logs, newest first."""
+    idx = _detlog_read_index()
+    idx.sort(key=lambda x: x.get("saved_at", ""), reverse=True)
+    return {"logs": idx}
+
+@app.delete("/api/v1/detlogs/{log_id}")
+async def delete_detection_log(log_id: str):
+    """Permanently remove one saved detection log."""
+    safe = os.path.basename(log_id)
+    path = os.path.join(_DETLOG_DIR, f"{safe}.json")
+    with _detlog_lock:
+        idx  = _detlog_read_index()
+        kept = [e for e in idx if e.get("id") != safe]
+        if len(kept) == len(idx) and not os.path.exists(path):
+            raise HTTPException(status_code=404, detail=f"Detection log {log_id} not found")
+        _detlog_write_index(kept)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            raise HTTPException(status_code=500, detail="Log file could not be removed")
+    return {"status": "DELETED", "id": safe}
+
 @app.post("/api/v1/quarantine")
 async def quarantine_host(request: Request, x_authority: str = Header(None)):
     """Log a quarantine action and store the blocked IP in settings."""
@@ -3796,6 +4059,20 @@ async def commit_alert(alert_id: str, request: Request,
 
         with open(CONFIG["ALERTS_FILE"], "w") as f:
             json.dump(alerts, f, separators=(",", ":"))
+        committed_alert = a
+
+    # Every commit also lands in the analyst feedback store — this is what the
+    # per-layer precision statistics are computed from, and it is browsable in
+    # Command & Control (Analyst Feedback Log).
+    if _feedback is not None and verification in ("confirm", "false"):
+        try:
+            _feedback.add_feedback(
+                committed_alert,
+                "CORRECT" if verification == "confirm" else "FALSE_ALARM",
+                note=analyst_notes or None,
+            )
+        except Exception:
+            pass   # feedback store failure must never block the alert commit
 
     return {
         "status": "COMMITTED",
@@ -3890,15 +4167,17 @@ async def update_config(request: Request):
     try:
         data = await request.json()
         current = _load_settings()
-        current.update(data)
+        # Only whitelisted keys are persisted — request metadata like
+        # {policy, value} or retired UI fields must never reach settings.json.
+        current.update({k: v for k, v in data.items() if k in _SETTINGS_ALLOWED_KEYS})
         _save_settings(current)
 
         # ── Live detection threshold sync ───────────────────────────────────
         global _alert_threshold, _ml_threshold, _anomaly_gate, _dpi_target
-        if any(k in data for k in ("sigWeight", "mlThreshold", "anomalyWeight")):
-            _alert_threshold = max(0.50, min(0.95, current.get("sigWeight", 70) / 100.0))
-            _ml_threshold    = max(0.40, min(0.95, current.get("mlThreshold", 60) / 100.0))
-            _anomaly_gate    = max(0.70, min(0.99, 1.0 - current.get("anomalyWeight", 50) * 0.003))
+        if any(k in data for k in ("sigConfFloor", "mlVoteThreshold", "anomalySensitivity")):
+            _alert_threshold = max(0.50, min(0.95, current.get("sigConfFloor", 70) / 100.0))
+            _ml_threshold    = max(0.40, min(0.95, current.get("mlVoteThreshold", 60) / 100.0))
+            _anomaly_gate    = max(0.70, min(0.99, 1.0 - current.get("anomalySensitivity", 50) * 0.003))
         if "dpi_target" in data or "dpi_enabled" in data:
             _dpi_target = current.get("dpi_target", "") if current.get("dpi_enabled") else ""
 
