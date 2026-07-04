@@ -36,12 +36,6 @@ const POLICY_CONFIG = [
     icon: <ShieldX size={14}/>,
   },
   {
-    key: 'geofence',
-    label: 'Geo-Fence Enforcement',
-    desc: 'Flags and restricts inbound traffic originating from high-risk geographic regions',
-    icon: <Globe size={14}/>,
-  },
-  {
     key: 'mfaEnforce',
     label: 'Verification Challenge',
     desc: 'Requires the analyst to type a randomly-generated verification word before executing destructive operations (active by default for hard lockdown, wipe, and quarantine actions)',
@@ -50,7 +44,7 @@ const POLICY_CONFIG = [
   {
     key: 'stealthMode',
     label: 'Stealth Mode',
-    desc: 'Suppresses outbound IDS telemetry and hides the sensor from active network discovery sweeps',
+    desc: 'Blocks inbound mDNS (UDP 5353) via Windows Firewall so this host is hidden from mDNS/Bonjour service discovery',
     icon: <Ghost size={14}/>,
   },
   {
@@ -62,7 +56,7 @@ const POLICY_CONFIG = [
   {
     key: 'ghostProtocol',
     label: 'Ghost Protocol',
-    desc: 'Cloaks this sensor node from ARP sweeps, port scans, and network topology discovery tools',
+    desc: 'Blocks inbound ICMP echo (ping) via Windows Firewall so this host stops replying to ping sweeps',
     icon: <BellOff size={14}/>,
   },
 ];
@@ -89,7 +83,6 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
 
   const [policies, setPolicies] = useState({
     autoIsolate:    true,
-    geofence:       false,
     mfaEnforce:     true,
     stealthMode:    false,
     deepInspection: true,
@@ -487,29 +480,35 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
               </button>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {[
-                { label: 'L1 · Signature Engine',    key: 'signature_engine', detail: `${Number(sigCount).toLocaleString()} active rules`,  icon: <Shield size={20}/> },
-                { label: 'L2 · Random Forest',       key: 'ml_rf',            detail: 'ML Classifier — Random Forest',                      icon: <BarChart3 size={20}/> },
-                { label: 'L2 · Gradient Boost',      key: 'ml_xgb',           detail: 'ML Classifier — Gradient Boost',                     icon: <Zap size={20}/> },
-                { label: 'L2 · Category Boost',      key: 'ml_cat',           detail: 'ML Classifier — Category Boost',                     icon: <KernelIcon size={20}/> },
-                { label: 'L3 · Neural Specialist',   key: 'dl',               detail: 'Deep Neural Network Classifier',                      icon: <Network size={20}/> },
-                { label: 'L4 · Anomaly Sentinel',    key: 'anomaly',          detail: 'Behavioral Anomaly Detection',                        icon: <Eye size={20}/> },
-              ].map(({ label, key, detail, icon }) => {
-                const active = health ? !!health[key] : false;
-                return (
-                  <div key={key} className={`p-4 rounded-xl border transition-all ${
-                    active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/40'
-                  }`}>
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className={active ? 'text-emerald-400' : 'text-slate-600'}>{icon}</div>
-                      <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-emerald-500' : 'bg-red-500/50'}`}></div>
-                    </div>
-                    <p className={`text-[10px] font-black uppercase tracking-widest ${active ? 'text-slate-300' : 'text-slate-600'}`}>{label}</p>
-                    <p className="text-[9px] text-slate-600 mt-1">{active ? detail : 'Not loaded'}</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {(() => {
+                const mlUp = health ? [health.ml_rf, health.ml_xgb, health.ml_cat].filter(Boolean).length : 0;
+                return [
+                  { label: 'L1 · Signature Engine', active: !!health?.signature_engine,
+                    detail: `Known-threat rule matching · ${Number(sigCount).toLocaleString()} rules`,
+                    icon: <Shield size={20}/> },
+                  { label: 'L2 · ML Ensemble',      active: mlUp >= 2,
+                    detail: `Supervised traffic classification · ${mlUp}/3 models online`,
+                    icon: <BarChart3 size={20}/> },
+                  { label: 'L3 · Neural Analysis',  active: !!health?.dl,
+                    detail: 'Deep-learning threat classification',
+                    icon: <Network size={20}/> },
+                  { label: 'L4 · Anomaly Sentinel', active: !!health?.anomaly,
+                    detail: 'Behavioural & zero-day detection',
+                    icon: <Eye size={20}/> },
+                ];
+              })().map(({ label, active, detail, icon }) => (
+                <div key={label} className={`p-4 rounded-xl border transition-all ${
+                  active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/40'
+                }`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className={active ? 'text-emerald-400' : 'text-slate-600'}>{icon}</div>
+                    <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-emerald-500' : 'bg-red-500/50'}`}></div>
                   </div>
-                );
-              })}
+                  <p className={`text-[10px] font-black uppercase tracking-widest ${active ? 'text-slate-300' : 'text-slate-600'}`}>{label}</p>
+                  <p className="text-[9px] text-slate-600 mt-1">{active ? detail : 'Offline'}</p>
+                </div>
+              ))}
             </div>
           </section>
 
@@ -536,6 +535,78 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
               )) : (
                 <div className="flex items-center justify-center h-full text-slate-700 text-[10px] uppercase font-black tracking-widest">
                   No admin actions recorded this session
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ANALYST FEEDBACK LOG — committed verdicts from Attack Analysis.
+              Sits under the audit log and spans the full main column. */}
+          <section className="bg-[#0d1117] border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+            <div className="bg-black/40 px-6 py-3 border-b border-slate-800 flex items-center justify-between">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <UserCheck size={13} className="text-emerald-500" /> Analyst Feedback Log
+              </h3>
+              <span className="text-[9px] text-slate-600 font-black uppercase tracking-widest">
+                {fbLog.length > 0 ? `${fbLog.length} committed verdicts` : 'Committed verdicts'}
+              </span>
+            </div>
+            <div className="p-5">
+              <p className="text-[9px] text-slate-600 leading-relaxed mb-4">
+                Every verdict committed from Attack Analysis lands here. Confirmed accuracy is the
+                share of alerts analysts marked as genuine — the system&apos;s real-world precision signal.
+              </p>
+              {fbStats && fbStats.total_feedback > 0 && (
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="bg-black/30 border border-slate-800 rounded-xl p-3 text-center">
+                    <p className="text-lg font-black text-white font-mono">{fbStats.total_feedback}</p>
+                    <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest mt-0.5">Total Verdicts</p>
+                  </div>
+                  <div className="bg-black/30 border border-emerald-900/40 rounded-xl p-3 text-center">
+                    <p className="text-lg font-black text-emerald-400 font-mono">
+                      {Math.round((fbStats.analyst_precision_signal ?? 0) * 100)}%
+                    </p>
+                    <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest mt-0.5">Confirmed Accuracy</p>
+                  </div>
+                  <div className="bg-black/30 border border-amber-900/40 rounded-xl p-3 text-center">
+                    <p className="text-lg font-black text-amber-400 font-mono">{fbStats.false_alarms}</p>
+                    <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest mt-0.5">False Positives</p>
+                  </div>
+                </div>
+              )}
+              {fbLog.length === 0 ? (
+                <p className="text-[10px] text-slate-700 font-mono py-6 text-center">
+                  No verdicts committed yet. Open an alert in Attack Analysis, judge it under
+                  Verification Protocol, and it will appear here.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                  {[...fbLog].reverse().slice(0, 50).map((r, i) => (
+                    <div key={i} className="bg-black/30 border border-slate-800/60 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest border ${
+                          r.judgement === 'CORRECT'
+                            ? 'bg-emerald-600/15 text-emerald-400 border-emerald-700/40'
+                            : 'bg-amber-600/15 text-amber-400 border-amber-700/40'
+                        }`}>
+                          {r.judgement === 'CORRECT' ? 'CONFIRMED' : 'FALSE POS'}
+                        </span>
+                        <span className="text-[9px] font-mono text-slate-400 truncate flex-1">
+                          {String(r.verdict || 'UNKNOWN').slice(0, 46)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-[8px] font-mono text-slate-600">
+                        {r.source_engine && <span>{r.source_engine}</span>}
+                        {r.srcip && <span>{r.srcip}</span>}
+                        {r.timestamp && <span className="ml-auto">{String(r.timestamp).slice(0, 16).replace('T', ' ')}</span>}
+                      </div>
+                      {r.note && (
+                        <p className="text-[9px] text-slate-500 mt-1 leading-relaxed border-t border-slate-800/60 pt-1">
+                          {r.note}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -667,74 +738,6 @@ export default function BastionCommandCenter({ status, liveHealth, lockdownActiv
             </div>
           </div>
 
-          {/* ANALYST FEEDBACK LOG — committed verdicts from Attack Analysis */}
-          <div className="bg-[#0d1117] border border-slate-800 p-5 rounded-2xl">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase mb-1 flex items-center gap-2">
-              <UserCheck size={13} className="text-emerald-500" /> Analyst Feedback Log
-              {fbLog.length > 0 && (
-                <span className="ml-auto px-2 py-0.5 bg-emerald-600/20 text-emerald-400 rounded text-[9px] font-black border border-emerald-600/30">
-                  {fbLog.length} VERDICTS
-                </span>
-              )}
-            </h3>
-            <p className="text-[9px] text-slate-600 leading-relaxed mb-3">
-              Every verdict committed from Attack Analysis lands here. Confirmed accuracy
-              is the share of alerts analysts marked as genuine.
-            </p>
-            {fbStats && fbStats.total_feedback > 0 && (
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="bg-black/30 border border-slate-800 rounded-lg p-2 text-center">
-                  <p className="text-sm font-black text-white font-mono">{fbStats.total_feedback}</p>
-                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">Total</p>
-                </div>
-                <div className="bg-black/30 border border-emerald-900/40 rounded-lg p-2 text-center">
-                  <p className="text-sm font-black text-emerald-400 font-mono">
-                    {Math.round((fbStats.analyst_precision_signal ?? 0) * 100)}%
-                  </p>
-                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">Accuracy</p>
-                </div>
-                <div className="bg-black/30 border border-amber-900/40 rounded-lg p-2 text-center">
-                  <p className="text-sm font-black text-amber-400 font-mono">{fbStats.false_alarms}</p>
-                  <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">False Pos</p>
-                </div>
-              </div>
-            )}
-            {fbLog.length === 0 ? (
-              <p className="text-[9px] text-slate-700 font-mono">
-                No verdicts committed yet. Open an alert in Attack Analysis, judge it under
-                Verification Protocol, and it will appear here.
-              </p>
-            ) : (
-              <div className="space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar pr-1">
-                {[...fbLog].reverse().slice(0, 50).map((r, i) => (
-                  <div key={i} className="bg-black/30 border border-slate-800/60 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest border ${
-                        r.judgement === 'CORRECT'
-                          ? 'bg-emerald-600/15 text-emerald-400 border-emerald-700/40'
-                          : 'bg-amber-600/15 text-amber-400 border-amber-700/40'
-                      }`}>
-                        {r.judgement === 'CORRECT' ? 'CONFIRMED' : 'FALSE POS'}
-                      </span>
-                      <span className="text-[9px] font-mono text-slate-400 truncate flex-1">
-                        {String(r.verdict || 'UNKNOWN').slice(0, 46)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-[8px] font-mono text-slate-600">
-                      {r.source_engine && <span>{r.source_engine}</span>}
-                      {r.srcip && <span>{r.srcip}</span>}
-                      {r.timestamp && <span className="ml-auto">{String(r.timestamp).slice(0, 16).replace('T', ' ')}</span>}
-                    </div>
-                    {r.note && (
-                      <p className="text-[9px] text-slate-500 mt-1 leading-relaxed border-t border-slate-800/60 pt-1">
-                        {r.note}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </aside>
       </div>
     </div>

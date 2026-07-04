@@ -990,7 +990,6 @@ _raw_packet_ring: deque = deque(maxlen=5000)
 # ─────────────────────────────────────────────────────────────
 _active_policies: dict = {
     "autoIsolate":    False,
-    "geofence":       False,
     "mfaEnforce":     False,
     "stealthMode":    False,
     "deepInspection": True,
@@ -1302,7 +1301,7 @@ def _load_alerts(max_entries: int = 100_000) -> list:
 _SETTINGS_DEFAULTS = {
     "systemName":"Bastion IDS","interface":"Auto","retentionDays":30,
     "cpuLimit":80,"ramLimit":80,"cnnWeight":40,"lstmWeight":35,
-    "sigWeight":25,"autoIsolate":False,"geoFence":False,"geofence":False,
+    "sigWeight":25,"autoIsolate":False,
     "mfaEnforce":False,"stealthMode":False,"deepInspection":True,
     "ghostProtocol":False,"apiKey":CONFIG["AUTH_KEY"],
     "logLevel":"INFO","alertThreshold":0.70,"anomalyThreshold":0.75,
@@ -1956,16 +1955,74 @@ async def get_all_devices(include_stale: bool = False, active_window_sec: int = 
         "window_sec":   active_window_sec,
     }
 
+_VIRTUAL_IFACE_HINTS = (
+    "vmnet", "vmware", "vethernet", "virtual", "loopback", "bluetooth",
+    "hyper-v", "default switch", "npcap loopback", "wan miniport",
+    "teredo", "isatap", "tap-", "tunnel", "docker",
+)
+
+def _iface_is_virtual(name: str) -> bool:
+    nl = (name or "").lower()
+    return any(h in nl for h in _VIRTUAL_IFACE_HINTS)
+
+def _default_route_ip() -> str:
+    """IP of the interface that owns the machine's default route.
+
+    Uses a UDP socket that is 'connected' but sends nothing — the OS picks the
+    egress interface, and getsockname() reveals its source IP. This is the most
+    reliable cross-machine way to identify the real active NIC (no hardcoding).
+    """
+    import socket
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))   # no packet actually sent for UDP
+        return s.getsockname()[0]
+    except Exception:
+        return ""
+    finally:
+        if s is not None:
+            try: s.close()
+            except Exception: pass
+
 @app.get("/api/v1/network/interfaces")
 async def get_interfaces():
     stats = psutil.net_if_stats()
     addrs = psutil.net_if_addrs()
+    route_ip = _default_route_ip()
     result = []
     for name, stat in stats.items():
-        ipv4 = next((a.address for a in addrs.get(name,[])
+        ipv4 = next((a.address for a in addrs.get(name, [])
                      if a.family == 2), "")
-        result.append({"name":name,"ip":ipv4,
-                        "speed":stat.speed,"is_up":stat.isup})
+        result.append({
+            "name": name, "ip": ipv4,
+            "speed": stat.speed, "is_up": stat.isup,
+            "virtual": _iface_is_virtual(name),
+            "has_default_route": bool(ipv4) and ipv4 == route_ip,
+            "recommended": False,
+        })
+
+    # Recommended = the interface an IDS should watch: a REAL physical NIC that
+    # is up and has an IP. Preference Wi-Fi > Ethernet > other physical. We do
+    # NOT follow the default route here because an active VPN pushes the default
+    # route onto a tunnel adapter, which is not what we want to monitor.
+    def _phys_rank(i):
+        if not (i["is_up"] and i["ip"] and not i["virtual"]):
+            return 99
+        nl = i["name"].lower()
+        if any(k in nl for k in ("wi-fi", "wifi", "wireless", "wlan")): return 0
+        if any(k in nl for k in ("ethernet", "eth", "lan")):            return 1
+        return 2
+    candidates = [i for i in result if _phys_rank(i) < 99]
+    if candidates:
+        best = min(candidates, key=_phys_rank)
+        best["recommended"] = True
+
+    # Physical first, recommended at the very top; virtual/down last.
+    result.sort(key=lambda i: (
+        not i["recommended"], i["virtual"], not i["is_up"], not i["ip"],
+    ))
     return result
 
 # ─────────────────────────────────────────────────────────────
@@ -2523,10 +2580,6 @@ def _process_packet_inner(pkt, loop):
                     target=_apply_auto_isolate, args=(src_ip,), daemon=True
                 ).start()
                 isolated_now = True
-
-            # ── Policy: Geo-Fence (flag suspicious public IPs) ───────────────
-            if _is_geo_fenced(src_ip):
-                pkt_info["geo_flagged"] = True
 
             # ── Broadcast THREAT_DETECTED so LiveMonitor can update its counter
             threat_evt = {
@@ -4184,7 +4237,7 @@ async def update_config(request: Request):
         # ── Real-time policy enforcement ────────────────────────────────────
         # If the update contains a 'policy' key/value pair from the admin UI,
         # apply the policy effect immediately (not just store it).
-        _POLICY_KEYS = {"autoIsolate","geofence","mfaEnforce",
+        _POLICY_KEYS = {"autoIsolate","mfaEnforce",
                         "stealthMode","deepInspection","ghostProtocol"}
         policy_key = data.get("policy")
         policy_val = data.get("value")

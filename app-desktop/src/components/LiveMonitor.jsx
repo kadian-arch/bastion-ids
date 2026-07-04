@@ -318,11 +318,13 @@ export default function LiveMonitor() {
   const [liveThreats,   setLiveThreats]  = useState([]);     // recent THREAT_DETECTED events (display only, capped at 20)
   const [sessionAlerts, setSessionAlerts] = useState(0);      // real session alert total (never capped)
   const [isolationToast, setIsolationToast] = useState(null); // auto-isolate notification
+  const [ifaceWarning,  setIfaceWarning]  = useState(null);   // generic no-frames hint
 
   const wsRef          = useRef(null);
   const tableRef       = useRef(null);
   const pktCount       = useRef(0);
   const pktTimestamps  = useRef([]);   // sliding window timestamps for PPS
+  const noTrafficTimer = useRef(null);  // fires a hint if a started capture stays silent
   const ppsTimer       = useRef(null);
 
   // Derived: the BPF string that will be applied on next start
@@ -334,39 +336,31 @@ export default function LiveMonitor() {
     let refreshTimer = null;
     let populated = false;
 
-    const isVirtual = n => {
-      const nl = n.toLowerCase();
-      return nl.includes('vmnet') || nl.includes('vmware') ||
-             nl.includes('vethernet') || nl.includes('virtual') ||
-             nl.includes('loopback') || nl.includes('bluetooth');
-    };
-
     const loadIfaces = (isRefresh = false) => {
       // 10 s timeout — interface enumeration via psutil is fast, but if the backend
       // is still finishing model loading the request may queue for a few seconds.
       axios.get(`${API_BASE}/network/interfaces`, { headers: AUTH_HDR, timeout: 10000 })
         .then(({ data }) => {
-          // Filter to real, up interfaces (exclude Loopback)
+          // Keep up interfaces except loopback. The backend already sorts them
+          // physical-first and flags `recommended` / `virtual`.
           const up = (data ?? []).filter(
             i => i.is_up && i.name && !i.name.toLowerCase().includes('loopback')
           );
           if (up.length > 0) {
             setInterfaces(up);
             if (!populated) {
-              // Restore user's last selection; only auto-pick if nothing saved
-              const saved = localStorage.getItem('bastion_sel_iface');
-              const savedExists = saved && up.some(i => i.name === saved);
-              if (!savedExists) {
-                // Pre-select the best physical interface (Wi-Fi > Ethernet > other)
-                const preferred =
-                  up.find(i => /wi.?fi|wireless|wlan/i.test(i.name)) ||
-                  up.find(i => /ethernet|lan|eth/i.test(i.name) && !isVirtual(i.name)) ||
-                  up.find(i => !isVirtual(i.name)) ||
-                  up[0];
-                setSelIface(preferred.name);
-                localStorage.setItem('bastion_sel_iface', preferred.name);
+              const recommended = up.find(i => i.recommended) || up[0];
+              const saved       = localStorage.getItem('bastion_sel_iface');
+              const savedIface  = saved && up.find(i => i.name === saved);
+              // Honour a saved selection ONLY if it's a real (non-virtual) NIC.
+              // A stale virtual/VPN selection is the classic "capture starts but
+              // shows nothing" trap — override it with the recommended NIC.
+              if (savedIface && !savedIface.virtual) {
+                // valid real selection — keep it
+              } else {
+                setSelIface(recommended.name);
+                localStorage.setItem('bastion_sel_iface', recommended.name);
               }
-              // else: saved interface is valid — already in state, no change needed
               populated = true;
             }
           } else if (!populated) {
@@ -393,6 +387,7 @@ export default function LiveMonitor() {
     return () => {
       clearTimeout(retryTimer);
       clearInterval(refreshTimer);
+      clearTimeout(noTrafficTimer.current);
       wsRef.current?.close();
       clearInterval(ppsTimer.current);
     };
@@ -470,6 +465,10 @@ export default function LiveMonitor() {
         }
 
         setCaptureError(null);  // clear any previous error on valid packet
+        if (pktCount.current === 0) {             // first frame — capture is truly live
+          setIfaceWarning(null);
+          clearTimeout(noTrafficTimer.current);
+        }
         pktCount.current += 1;
         pktTimestamps.current.push(Date.now());   // record arrival for PPS calc
         setPackets(prev => {
@@ -494,10 +493,31 @@ export default function LiveMonitor() {
   }, [selIface]);   // eslint-disable-line
 
   // ── Capture controls ─────────────────────────────────────────────────────────
+  // After START, if not a single frame arrives within 6s the chosen adapter is
+  // almost certainly a virtual/VPN/idle interface. Surface a GENERIC hint
+  // (never hardcoded to a specific adapter) pointing at the recommended NIC.
+  const armNoTrafficHint = () => {
+    clearTimeout(noTrafficTimer.current);
+    noTrafficTimer.current = setTimeout(() => {
+      if (pktCount.current === 0) {
+        const rec = interfaces.find(i => i.recommended);
+        const cur = interfaces.find(i => i.name === selIface);
+        const isVirt = cur?.virtual;
+        setIfaceWarning(
+          (isVirt
+            ? `No frames on “${selIface}”. This looks like a virtual or VPN adapter, which usually carries no capturable traffic. `
+            : `No frames seen on “${selIface || 'Auto'}” yet. `) +
+          (rec && rec.name !== selIface
+            ? `Try the recommended interface “${rec.name}”${rec.ip ? ` (${rec.ip})` : ''}.`
+            : `Confirm this interface carries traffic, or that Bastion IDS is running as Administrator.`)
+        );
+      }
+    }, 6000);
+  };
+
   const handleStart = () => {
     setCaptureError(null);
     setIfaceWarning(null);
-    setRecIface(null);
     setPackets([]);
     setLiveThreats([]);
     setSessionAlerts(0);
@@ -508,6 +528,7 @@ export default function LiveMonitor() {
     setSelPacket(null);
     setActiveBpf(pendingBpf);
     openWs('START', pendingBpf);
+    armNoTrafficHint();
   };
 
   const handleStop = () => {
@@ -515,22 +536,27 @@ export default function LiveMonitor() {
       wsRef.current.send(JSON.stringify({ action: 'STOP' }));
     }
     setCaptureState('stopped');
+    setIfaceWarning(null);
+    clearTimeout(noTrafficTimer.current);
     stopPps();
   };
 
   const handleContinue = () => {
     setActiveBpf(pendingBpf);
     openWs('START', pendingBpf);   // resume on same packet list
+    armNoTrafficHint();
   };
 
   const handleRestart = () => {
     setPackets([]);
+    setIfaceWarning(null);
     pktCount.current      = 0;
     pktTimestamps.current = [];
     setStats({ total: 0, threats: 0, pps: 0, bytes: 0 });
     setSelPacket(null);
     setActiveBpf(pendingBpf);
     openWs('RESTART', pendingBpf);
+    armNoTrafficHint();
   };
 
   // ── Unique filename generator ─────────────────────────────────────────────
@@ -687,7 +713,9 @@ export default function LiveMonitor() {
             <option value="">Auto — All Interfaces</option>
             {interfaces.map(i => (
               <option key={i.name} value={i.name}>
-                {i.name}{i.ip ? ` · ${i.ip}` : ''}{!i.is_up ? ' [DOWN]' : ''}
+                {i.name}{i.ip ? ` · ${i.ip}` : ''}
+                {i.recommended ? '  ★ recommended' : i.virtual ? '  (virtual)' : ''}
+                {!i.is_up ? ' [DOWN]' : ''}
               </option>
             ))}
           </select>
@@ -951,11 +979,19 @@ export default function LiveMonitor() {
                         <p className="text-slate-600 text-[9px] mt-1">Double-click START_BASTION.bat → allow UAC → then restart capture</p>
                       </div>
                     ) : captureState === 'running' ? (
-                      <div className="flex flex-col items-center gap-2">
-                        <Activity size={22} className="text-cyan-500 animate-pulse" />
-                        <p className="text-slate-600 text-[11px] uppercase font-bold tracking-widest">Capture interface bound — awaiting traffic frames...</p>
-                        <p className="text-slate-700 text-[9px]">BPF filter active: ip or arp — only IPv4 and ARP packets shown</p>
-                      </div>
+                      ifaceWarning ? (
+                        <div className="flex flex-col items-center gap-3">
+                          <AlertCircle size={26} className="text-amber-500" />
+                          <p className="text-amber-400 text-[11px] font-black uppercase tracking-widest">No Traffic On This Interface</p>
+                          <p className="text-amber-400/80 text-[10px] font-bold max-w-md leading-relaxed">{ifaceWarning}</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-2">
+                          <Activity size={22} className="text-cyan-500 animate-pulse" />
+                          <p className="text-slate-600 text-[11px] uppercase font-bold tracking-widest">Capture interface bound — awaiting traffic frames...</p>
+                          {activeBpf && <p className="text-slate-700 text-[9px]">Active filter: {activeBpf}</p>}
+                        </div>
+                      )
                     ) : captureState === 'stopped' ? (
                       <p className="text-slate-700 text-[11px] uppercase font-bold tracking-widest">Capture paused — click Continue to resume or Restart to clear.</p>
                     ) : (
