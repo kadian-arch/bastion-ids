@@ -27,10 +27,22 @@ os.environ["KERAS_BACKEND"]          = "tensorflow"
 
 warnings.filterwarnings("ignore")          # suppress Python-level warnings (GPU, etc.)
 
-import tensorflow as tf
-logging.getLogger("tensorflow").setLevel(logging.ERROR)
-logging.getLogger("keras").setLevel(logging.ERROR)
-tf.get_logger().setLevel("ERROR")
+# TensorFlow is REQUIRED only for Layer 3 (DNN) and the Layer 4 autoencoder.
+# On machines whose CPU lacks AVX, or with an outdated VC++ runtime, TF's native
+# DLL fails to load. That must NOT take down the whole engine — Layers 1, 2 and
+# the Isolation-Forest half of Layer 4 are pure sklearn/xgboost/catboost and work
+# fine without it. So we import TF defensively and degrade gracefully.
+try:
+    import tensorflow as tf
+    logging.getLogger("tensorflow").setLevel(logging.ERROR)
+    logging.getLogger("keras").setLevel(logging.ERROR)
+    tf.get_logger().setLevel("ERROR")
+    TF_AVAILABLE = True
+    TF_LOAD_ERROR = None
+except Exception as _tf_ex:               # ImportError, DLL init failure, etc.
+    tf = None
+    TF_AVAILABLE = False
+    TF_LOAD_ERROR = str(_tf_ex).split("\n")[0][:160]
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -89,11 +101,17 @@ class BastionEngine:
             self._log(f"SYSTEM: Anomaly threshold: {self.anomaly_config['autoencoder']['operational_threshold']:.5f}")
 
         ok  = lambda v: "[OK]" if v else "[--]"
-        self._log("SYSTEM: [OK] ALL 4 DETECTION LAYERS ONLINE")
+        layers_up = self.get_model_status()["layers_active"]
+        if layers_up == 4:
+            self._log("SYSTEM: [OK] ALL 4 DETECTION LAYERS ONLINE")
+        else:
+            self._log(f"SYSTEM: [WARN] {layers_up}/4 DETECTION LAYERS ONLINE "
+                      f"(deep-learning layer disabled — TensorFlow unavailable on "
+                      f"this machine; signature, ML and anomaly detection active)")
         self._log(
             f"SYSTEM: Signatures: {self.sig_engine.rules_count:,} | "
             f"ML: {ok(self.rf)} RF {ok(self.xgb)} XGB {ok(self.cat)} CAT | "
-            f"DL: {ok(self.dl)} | Anomaly: {ok(self.autoencoder)}"
+            f"DL: {ok(self.dl)} | Anomaly: {ok(self.autoencoder or self.isolation_forest)}"
         )
 
     # ── Loaders ────────────────────────────────────────────────────
@@ -178,6 +196,11 @@ class BastionEngine:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _try_load_keras(self, *names):
+        if not TF_AVAILABLE:
+            self._log(f"  [WARN] Skipping {names[0]} — TensorFlow unavailable "
+                      f"({TF_LOAD_ERROR}). Deep-learning layer disabled; other "
+                      f"layers unaffected.")
+            return None
         for name in names:
             path = os.path.join(MODEL_DIR, name)
             if not os.path.exists(path):
@@ -493,12 +516,15 @@ class BastionEngine:
             "ml_xgb":   self.xgb is not None,
             "ml_cat":   self.cat is not None,
             "dl":       self.dl is not None,
-            "anomaly":  self.autoencoder is not None,
+            # Layer 4 is "up" if EITHER detector is available. The Isolation
+            # Forest is pure sklearn and works even when TF (autoencoder) can't load.
+            "anomaly":  (self.autoencoder is not None) or (self.isolation_forest is not None),
             "isolation_forest": self.isolation_forest is not None,
+            "tf_available": TF_AVAILABLE,
             "layers_active": sum([
                 self.sig_engine.rules_count > 0,
                 any([self.rf, self.xgb, self.cat]),
                 self.dl is not None,
-                self.autoencoder is not None,
+                (self.autoencoder is not None) or (self.isolation_forest is not None),
             ])
         }

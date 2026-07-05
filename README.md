@@ -239,24 +239,24 @@ Windows Defender is quarantining files mid-extraction. Before running the instal
 **"Engine failed to start" on the splash screen**
 The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall. A corrupted installation is the most likely cause.
 
-**Layer 3 (DNN) shows offline / "TensorFlow failed to load"**
-Two possible causes:
+**Layer 3 (DNN) shows offline — the other layers keep working**
+Bastion is designed to degrade gracefully: if TensorFlow cannot load, Layer 3 (the deep-learning specialist) is disabled but Layers 1 (signatures), 2 (ML ensemble) and 4 (anomaly detection) stay fully online, so the system remains protective. The status panel will show 3/4 layers active. Two causes:
 
-1. **Visual C++ 2022 Runtime is missing.** Download and install it, then restart Bastion IDS:
+1. **Visual C++ 2022 Runtime is outdated or missing.** The installer bundles and runs the current runtime automatically. If Layer 3 is still offline, install it manually and restart Bastion IDS:
    [vc_redist.x64.exe — Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
 
-2. **Your CPU does not support AVX2.** TensorFlow requires AVX2 instructions, available on Intel Haswell (2013) and newer, and AMD Ryzen (2017) and newer. If your CPU predates these, Layer 3 cannot run on your machine. Layers 1, 2, and 4 remain fully operational.
+2. **Your CPU does not support AVX.** TensorFlow requires AVX instructions (Intel Sandy Bridge / 2011 and newer, AMD Bulldozer / 2011 and newer). On older CPUs, Layer 3 cannot run at all — this is a hardware limit, not a bug. The other three layers are unaffected.
 
-To confirm which applies, run this in PowerShell and check the CPU name against your processor's release year:
+To check your CPU, run this in PowerShell:
 ```powershell
 (Get-WmiObject -Class Win32_Processor).Name
 ```
 
-**Live packet capture shows no traffic**
-The installer automatically installs Npcap. If it was skipped or removed, download and install it manually from [npcap.com](https://npcap.com), then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, raw packet capture is blocked by Windows.
+**Live packet capture shows no traffic / "capture won't start"**
+Live capture needs the Npcap driver. During installation, the Npcap setup wizard opens automatically — click through its prompts (the defaults are fine). Npcap's free edition does not allow silent installation, so this one interactive step is required. If you skipped it, re-run the Bastion installer or install Npcap from [npcap.com](https://npcap.com), then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, Windows blocks raw packet capture.
 
-**First launch takes 2-3 minutes**
-Normal. The AI models (TensorFlow, XGBoost, CatBoost) load from disk on first launch. Subsequent launches are faster once Windows caches the files.
+**First launch takes 2-3 minutes (sometimes longer)**
+Normal. On first launch the AI models load from disk and a one-time font cache is built. Cold start on a slow disk can take several minutes; the splash screen waits up to 6 minutes before reporting a failure. Subsequent launches are much faster.
 
 **The app installed but will not open at all**
 Make sure you are on Windows 10 (build 1903 or later) or Windows 11. Windows 7/8 are not supported. Also confirm your machine has at least 4 GB of free RAM. The full model stack needs headroom to load.

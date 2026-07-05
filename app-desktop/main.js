@@ -83,7 +83,7 @@ const SPLASH_MESSAGES = [
  * Poll until the backend passes an HTTP health check, or until timeout.
  * Updates the splash message automatically as time passes.
  */
-async function waitForBackend(timeoutMs = 180000) {
+async function waitForBackend(timeoutMs = 360000) {
   const start = Date.now();
   let msgIdx = 0;
   while (Date.now() - start < timeoutMs) {
@@ -238,7 +238,9 @@ async function createWindow() {
 
     // Wait until the backend passes a real HTTP health check.
     // Dynamic splash messages update automatically inside waitForBackend.
-    const ready = await waitForBackend(180000);
+    // 6 min: first launch on a slow disk also builds the matplotlib font cache
+    // and unpacks TensorFlow — this can push cold-start well past 3 minutes.
+    const ready = await waitForBackend(360000);
     logLaunch(`waitForBackend -> ${ready}`);
     if (!ready) {
       updateSplashMsg('Engine failed to start. Check BastionIDS-launch.log in your Temp folder.');

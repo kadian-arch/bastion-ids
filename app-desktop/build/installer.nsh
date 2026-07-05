@@ -24,31 +24,35 @@
   DetailPrint "----------------------------------------------------------------"
 
   ; --- Visual C++ 2022 Runtime (required for TensorFlow / DNN layer) ---
-  DetailPrint "Checking for Visual C++ 2022 Runtime..."
+  ; ALWAYS run the redistributable. It is idempotent: if a NEWER runtime is
+  ; already present it self-skips in seconds. The old "skip if vcruntime140.dll
+  ; exists" check was wrong — an OUTDATED vcruntime140.dll is present but still
+  ; too old for TensorFlow, so we must let the installer decide, not a file test.
+  DetailPrint "Ensuring Visual C++ 2022 Runtime is up to date..."
   !if /FileExists "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
-    IfFileExists "$SYSDIR\vcruntime140.dll" vcpp_present 0
-      DetailPrint "  VC++ Runtime not found - installing (required for TensorFlow)..."
-      File "/oname=$PLUGINSDIR\vc_redist.x64.exe" "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
-      ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
-      DetailPrint "  VC++ Runtime installer finished (exit code: $0)."
-      Goto vcpp_done
-    vcpp_present:
-      DetailPrint "  Visual C++ Runtime already installed - skipping."
-    vcpp_done:
+    File "/oname=$PLUGINSDIR\vc_redist.x64.exe" "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
+    ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
+    DetailPrint "  VC++ Runtime installer finished (exit code: $0)."
   !else
-    DetailPrint "  VC++ Runtime not bundled. If TensorFlow fails to load, download:"
+    DetailPrint "  VC++ Runtime not bundled. If the DNN layer shows offline, install:"
     DetailPrint "  https://aka.ms/vs/17/release/vc_redist.x64.exe"
   !endif
   DetailPrint "----------------------------------------------------------------"
 
   ; --- Npcap packet-capture driver (required for live packet capture) ---
+  ; The FREE Npcap redistributable forbids /S silent installation (that flag is
+  ; reserved for the paid Npcap OEM edition and pops a rejection dialog). So we
+  ; run its normal wizard INTERACTIVELY — exactly how Wireshark ships it. The
+  ; user clicks through a couple of prompts; still fully in-box, no download.
   DetailPrint "Checking for Npcap packet-capture driver..."
   !if /FileExists "${BUILD_RESOURCES_DIR}\npcap-installer.exe"
     IfFileExists "$SYSDIR\Npcap\wpcap.dll" npcap_present 0
     IfFileExists "$SYSDIR\wpcap.dll" npcap_present 0
-      DetailPrint "  Npcap not found - installing (required for live capture)..."
+      DetailPrint "  Npcap not found - launching its installer (needed for live capture)."
+      DetailPrint "  Please click through the Npcap setup prompts when they appear."
+      MessageBox MB_OK|MB_ICONINFORMATION "Bastion IDS needs the Npcap driver for live packet capture.$\r$\n$\r$\nThe Npcap installer will now open — please click through its prompts (the defaults are fine). Live capture will not work without it."
       File "/oname=$PLUGINSDIR\npcap-installer.exe" "${BUILD_RESOURCES_DIR}\npcap-installer.exe"
-      ExecWait '"$PLUGINSDIR\npcap-installer.exe" /S' $0
+      ExecWait '"$PLUGINSDIR\npcap-installer.exe"' $0
       DetailPrint "  Npcap installer finished (exit code: $0)."
       Goto npcap_done
     npcap_present:
