@@ -75,7 +75,7 @@ The AI component is the core of this work. The application exists to demonstrate
 
 **Leakage prevention:** The preprocessor (StandardScaler + OrdinalEncoder) was fitted exclusively on the training set and applied identically to the test set. SMOTE was applied after the split and only to training data. The test set of 131,535 samples (20%) was never touched during any fitting step. IP addresses, timestamps, and port identifiers that would allow models to memorise endpoints rather than learn behaviour were excluded from the feature vector.
 
-**Class imbalance:** Addressed at three levels. SMOTE was applied to bring all minority classes to a minimum of 800 samples in the training set. Random Forest used `class_weight="balanced"`, CatBoost used `auto_class_weights="Balanced"`, and the DNN used computed class weights passed at training time.
+**Class imbalance:** Addressed at three levels. SMOTE and variants were applied to bring all minority classes to a minimum of 800 samples in the training set. Random Forest used `class_weight="balanced"`, CatBoost used `auto_class_weights="Balanced"`, and the DNN used computed class weights passed at training time.
 
 **Overfitting prevention:** Random Forest and XGBoost used RandomizedSearchCV with 3-fold cross-validation (12 and 15 iterations respectively). CatBoost used early stopping with patience 30 and stopped at iteration 128 of 500. The DNN (Residual MLP) used dropout across three stages (0.3, 0.25, 0.2), batch normalisation, early stopping at patience 8 on validation accuracy, and ReduceLROnPlateau. The autoencoder early-stopped at epoch 74 of 80.
 
@@ -98,20 +98,20 @@ The autoencoder (Layer 4) was trained exclusively on normal traffic. At the oper
 | Requirement | Minimum |
 |---|---|
 | OS | Windows 10 (build 1903 / version 1909) or Windows 11 |
-| CPU | 64-bit with AVX2 support — Intel Haswell (2013) or newer, AMD Ryzen (2017) or newer |
+| CPU | 64-bit with AVX support — Intel Sandy Bridge (2011) or newer, AMD Bulldozer (2011) or newer |
 | RAM | 4 GB minimum — 8 GB recommended |
 | Storage | 4 GB free space |
 | Privileges | Administrator — required for live packet capture |
 
-> **Note on older CPUs:** Layer 3 (Deep Neural Network) runs on TensorFlow, which requires AVX2. On machines without it, the DNN layer is disabled but Layers 1, 2, and 4 continue to operate normally.
+> **Note on older CPUs:** Layer 3 (Deep Neural Network) runs on TensorFlow, which requires AVX. On machines without it, the DNN layer is disabled automatically but Layers 1, 2, and 4 continue to operate normally (3/4 layers shown in the dashboard).
 
-The installer bundles Npcap and the Visual C++ 2022 Runtime and installs them automatically. No internet connection is required after downloading the installer.
+The installer bundles Npcap and the Visual C++ 2022 Runtime. The Visual C++ Runtime installs automatically; the Npcap driver opens its short setup wizard during installation for you to click through (its licence requires this).
 
 ## Download
 
 **[Download Bastion IDS Setup 2.0.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
 
-The installer includes all trained models, the Python runtime, Npcap, and the Visual C++ Runtime. Everything needed to run is bundled — no additional downloads required.
+The installer includes all trained models, the Python runtime, Npcap, and the Visual C++ Runtime — everything is bundled, no additional downloads required. During setup the Npcap driver shows a short wizard to click through (its licence requires this); the rest installs automatically.
 
 ## Running from source
 
@@ -170,7 +170,7 @@ The dashboard includes response controls (port quarantine, IP blocking) designed
 
 **Data Ingest Portal**: Drop a `.csv`, `.pcap`, or `.log` file and run a full ML sweep across all flows. Good for post-incident analysis of captured traffic.
 
-**Threat Intelligence**: Full alert log with severity filter, IP/type search, and CSV export. Click any alert for the deep-dive report: neural weight distribution chart, raw packet hex dump, and analyst verification (mark true/false positive, add notes). Forensic reports also generated in three different formats and downloadable in any desired of three, csv, html and pdf(which can be submitted in legal situations like court hearings).
+**Threat Intelligence**: Full alert log with severity filter, IP/type search, and CSV export. Every analysis session can be saved as a permanent detection log and reopened later from a session picker — logs survive restarts and are only removed on uninstall or manual delete. Click any alert for the deep-dive report: neural weight distribution chart, raw packet hex dump, and analyst verification (mark true/false positive, add notes). Forensic reports also generated in three different formats and downloadable in any desired of three, csv, html and pdf(which can be submitted in legal situations like court hearings).
 
 **Network Topology**: Live ARP scan of the local subnet visualized as a node map. Classifies devices as server, gateway, or workstation, performs basic host info discovery such as OS.
 
@@ -234,7 +234,7 @@ The source code is publicly available. If you're a researcher, a student, or som
 This appears because the installer is not commercially code-signed. Click "More info" then "Run anyway." The installer is safe.
 
 **"Error decompressing data! Corrupted installer?" during installation**
-Windows Defender is quarantining files mid-extraction. Before running the installer, go to Windows Security → Virus & threat protection → Manage settings → turn off Real-time protection temporarily, complete the installation, then turn it back on. Alternatively add `C:\Program Files\Bastion IDS` as a Defender exclusion before running the installer.
+Windows Defender is quarantining files mid-extraction. Before running the installer, go to Windows Security → Virus & threat protection → Manage settings → turn off Real-time protection temporarily, complete the installation, then turn it back on. Alternatively add `C:\Program Files\Bastion IDS` or the install path you select as a Defender exclusion before running the installer.
 
 **"Engine failed to start" on the splash screen**
 The detection engine (Python backend) did not launch in time. Check `%TEMP%\BastionIDS-launch.log` for the exact error. Common causes: the app was not run as Administrator (right-click → Run as administrator), or antivirus software blocked the engine process. If the log shows a missing module, uninstall and reinstall. A corrupted installation is the most likely cause.
@@ -255,8 +255,11 @@ To check your CPU, run this in PowerShell:
 **Live packet capture shows no traffic / "capture won't start"**
 Live capture needs the Npcap driver. During installation, the Npcap setup wizard opens automatically — click through its prompts (the defaults are fine). Npcap's free edition does not allow silent installation, so this one interactive step is required. If you skipped it, re-run the Bastion installer or install Npcap from [npcap.com](https://npcap.com), then restart Bastion IDS. Also confirm the app is running as Administrator — without admin rights, Windows blocks raw packet capture.
 
-**First launch takes 2-3 minutes (sometimes longer)**
+**First launch takes ~3-4 minutes (sometimes longer)**
 Normal. On first launch the AI models load from disk and a one-time font cache is built. Cold start on a slow disk can take several minutes; the splash screen waits up to 6 minutes before reporting a failure. Subsequent launches are much faster.
+
+**Windows Firewall asks to allow Python on first launch**
+Click Allow. That prompt is the Bastion detection engine — it serves the dashboard locally on your own machine (127.0.0.1) and needs the permission to do so. Nothing is sent to the internet.
 
 **The app installed but will not open at all**
 Make sure you are on Windows 10 (build 1903 or later) or Windows 11. Windows 7/8 are not supported. Also confirm your machine has at least 4 GB of free RAM. The full model stack needs headroom to load.
