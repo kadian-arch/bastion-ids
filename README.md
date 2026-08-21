@@ -110,7 +110,7 @@ The installer bundles Npcap and the Visual C++ 2022 Runtime. The Visual C++ Runt
 
 ## Download
 
-**[Download Bastion IDS Setup 2.0.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
+**[Download Bastion IDS Setup 2.1.0 for Windows →](https://github.com/kadian-arch/bastion-ids/releases/latest)**
 
 The installer includes all trained models, the Python runtime, Npcap, and the Visual C++ Runtime, everything is bundled, no additional downloads required. During setup the Npcap driver shows a short wizard to click through (its licence requires this); the rest installs automatically.
 
