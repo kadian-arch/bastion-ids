@@ -1,0 +1,38 @@
+{
+  "systemName": "BastionNode-01",
+  "interface": "wifi",
+  "retentionDays": 90,
+  "cpuLimit": 80,
+  "ramLimit": 5000,
+  "cnnWeight": 85,
+  "lstmWeight": 90,
+  "sigWeight": 98,
+  "autoIsolate": false,
+  "mfaEnforce": false,
+  "stealthMode": false,
+  "deepInspection": true,
+  "ghostProtocol": false,
+  "apiKey": "BASTION-C7573DE3C34C8441",
+  "logLevel": "INFO",
+  "alertThreshold": 0.7,
+  "anomalyThreshold": 0.75,
+  "sigConfFloor": 70,
+  "mlVoteThreshold": 60,
+  "anomalySensitivity": 50,
+  "system_mode": "OPERATIONAL",
+  "dpi_target": "",
+  "dpi_enabled": false,
+  "quarantined_ips": [
+    "192.168.0.1",
+    "172.20.0.5",
+    "10.1.1.1",
+    "192.168.99.200",
+    "203.0.113.99"
+  ],
+  "last_quarantine": {
+    "ip": "192.168.99.200",
+    "protocol": "",
+    "reason": "test-quarantine",
+    "at": "2026-05-26T11:12:18.220584"
+  }
+}

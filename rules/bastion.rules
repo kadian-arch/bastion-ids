@@ -1,0 +1,19 @@
+# rules/bastion.rules — Bastion custom detections
+# These rules are evaluated by our engine and only use features it supports:
+# plain content matching, port matching, protocol matching, and direction.
+
+alert tcp $EXTERNAL_NET any -> $HOME_NET 445 (msg:"ET EXPLOIT Possible SMB Ghost"; flow:to_server; sid:2026001;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 3389 (msg:"ET SCAN RDP brute force attempt"; flags:S; sid:2026002;)
+alert ip $BAD_REPUTATION any -> $HOME_NET any (msg:"ET DROP Known Malicious IP"; sid:2026003;)
+
+# ── Cobalt Strike Beacon stager (Bastion custom — replaces ET SID 2024771) ───
+# Matches the exact Cobalt Strike x86 Beacon stager prolog delivered over HTTP.
+# The 7-byte prolog \xfc\xe8\x00\x00\x00\x00\xeb is the CLD + CALL $+5 + JMP SHORT
+# sequence that begins every CS Beacon payload.  We also require the HTTP 200
+# status code to be present so we confirm this is an inbound HTTP response.
+# Unlike ET SID 2024771, we do NOT apply file_data depth constraints since our
+# engine matches raw payload; instead we rely on the specificity of the 7 bytes.
+# False positives from compressed responses are suppressed by also matching the
+# absence of the gzip magic bytes — NOT matched by content but by requiring a
+# high-entropy binary check at the application layer (done in api_server.py).
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"BASTION Cobalt Strike Beacon Stager Payload (inbound HTTP)"; flow:from_server; content:"200"; content:"|fc e8 00 00 00 00 eb|"; classtype:trojan-activity; sid:2099001; rev:1;)

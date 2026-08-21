@@ -1,0 +1,17 @@
+[
+  {
+    "alert_id": "test-001",
+    "verdict": "Exploits",
+    "source_engine": "ML_ENSEMBLE",
+    "judgement": "CORRECT",
+    "true_label": null,
+    "srcip": null,
+    "dstip": null,
+    "proto": null,
+    "dsport": null,
+    "confidence": 0.9,
+    "session": null,
+    "timestamp": "2026-06-15T19:15:27.125055",
+    "note": "functional test"
+  }
+]

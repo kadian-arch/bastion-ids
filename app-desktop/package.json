@@ -1,0 +1,104 @@
+{
+  "name": "bastion-ids",
+  "productName": "Bastion IDS",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Bastion IDS - a hybrid intrusion detection system combining signatures, machine learning, deep learning and anomaly detection.",
+  "author": "KING KAD (Kadian Inc) <support@kadian.inc>",
+  "license": "SEE LICENSE IN build/eula.txt",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron": "wait-on http://localhost:48218 && electron main.js",
+    "start": "concurrently \"npm run dev\" \"npm run electron\"",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "axios": "^1.13.6",
+    "chart.js": "^4.5.1",
+    "clsx": "^2.1.1",
+    "electron-is-dev": "^3.0.1",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^0.577.0",
+    "react": "^19.2.4",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@eslint/js": "^9.39.4",
+    "@rolldown/plugin-babel": "^0.2.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.4.27",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "concurrently": "^9.2.1",
+    "electron": "^41.0.3",
+    "electron-builder": "^26.8.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^4.2.2",
+    "vite": "^8.0.1",
+    "wait-on": "^9.0.4"
+  },
+  "build": {
+    "appId": "com.kadianinc.bastionids",
+    "productName": "Bastion IDS",
+    "copyright": "Copyright (c) 2026 Kadian Inc. All rights reserved.",
+    "directories": {
+      "output": "../_installer",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "dist/**/*",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../_runtime/pybackend", "to": "pybackend" },
+      { "from": "../api_server.py", "to": "backend/api_server.py" },
+      { "from": "../__init__.py", "to": "backend/__init__.py" },
+      { "from": "../core", "to": "backend/core", "filter": ["**/*", "!**/__pycache__/**"] },
+      { "from": "../utils", "to": "backend/utils", "filter": ["**/*", "!**/__pycache__/**"] },
+      { "from": "../models", "to": "backend/models" },
+      { "from": "../rules", "to": "backend/rules" },
+      { "from": "../config", "to": "backend/config", "filter": ["**/*", "!**/__pycache__/**"] },
+      { "from": "dist", "to": "backend/app-desktop/dist" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
+      "signtoolOptions": null
+    },
+    "forceCodeSigning": false,
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "license": "build/eula.txt",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "uninstallDisplayName": "Bastion IDS (Kadian Inc)",
+      "shortcutName": "Bastion IDS",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "differentialPackage": false,
+      "include": "build/installer.nsh"
+    },
+    "compression": "normal"
+  }
+}
